@@ -1,0 +1,1 @@
+📝 MEMORY: For Supabase schema modifications, always use the Supabase API with the service key in BOTH the 'apikey' header AND the 'Authorization' header (as Bearer token). This ensures proper permissions for DDL operations.

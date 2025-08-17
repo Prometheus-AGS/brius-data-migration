@@ -1,0 +1,220 @@
+# =================================================================
+# DATABASE MIGRATION PROJECT .gitignore
+# =================================================================
+
+# ========================================
+# Environment & Configuration Files
+# ========================================
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.backup
+config.json
+secrets.json
+
+# ========================================
+# Node.js Dependencies
+# ========================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.yarn/cache
+.yarn/unplugged
+.yarn/build-state.yml
+.yarn/install-state.gz
+.pnp.*
+
+# ========================================
+# TypeScript Build Output
+# ========================================
+dist/
+build/
+*.tsbuildinfo
+*.js.map
+*.d.ts.map
+
+# ========================================
+# Database & Migration Sensitive Files
+# ========================================
+# Database dumps and backups
+*.sql.bak
+*.dump
+*.backup
+database_backup_*
+migration_backup_*
+
+# Connection strings and credentials
+database.json
+db-config.json
+connection-strings.txt
+credentials.txt
+
+# Migration logs (keep general logs, ignore sensitive ones)
+migration_*.log
+error_*.log
+debug_*.log
+
+# Temporary migration data
+temp_migration_*
+migration_temp/
+*.tmp
+
+# ========================================
+# Development & IDE Files
+# ========================================
+# VS Code
+.vscode/
+*.code-workspace
+
+# JetBrains IDEs
+.idea/
+*.swp
+*.swo
+
+# Vim
+*~
+.*.swp
+.*.swo
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+
+# MacOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# ========================================
+# Logs & Runtime Files
+# ========================================
+logs/
+*.log
+pids/
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage/
+*.lcov
+
+# Dependency directories
+jspm_packages/
+
+# ========================================
+# Project-Specific Files
+# ========================================
+# Backup files (keep originals, ignore backups)
+*.backup
+*.backup2
+*.bak
+*_backup_*
+
+# Test results and temporary files
+test_results/
+temp_*
+*_temp.*
+
+# Generated reports (keep final reports, ignore temp ones)
+temp_report_*
+debug_report_*
+
+# Package backup files
+package.json.backup
+package-lock.json.backup
+
+# ========================================
+# Archive & Compressed Files
+# ========================================
+*.7z
+*.rar
+*.zip
+*.tar.gz
+*.tgz
+
+# ========================================
+# Security & Certificates
+# ========================================
+*.pem
+*.key
+*.cert
+*.crt
+*.p12
+*.pfx
+
+# ========================================
+# Runtime & Cache
+# ========================================
+.cache/
+.parcel-cache/
+.next/
+.nuxt/
+.vuepress/dist/
+
+# ESLint cache
+.eslintcache
+
+# Optional REPL history
+.node_repl_history
+
+# Output of 'npm pack'
+*.tgz
+
+# Yarn Integrity file
+.yarn-integrity
+
+# ========================================
+# Keep Important Files (Negated Patterns)
+# ========================================
+# Keep important documentation
+!README.md
+!MIGRATION_*.md
+!*_REPORT.md
+!FINAL_*.md
+
+# Keep essential configuration templates
+!.env.example
+!config.example.json
+
+# Keep important SQL schema files
+!*.schema.sql
+!create_*.sql
+!populate_*.sql
+
+# Keep migration validation scripts
+!validate-*.ts
+!verify-*.ts
+
+# ========================================
+# Project Documentation to Keep
+# ========================================
+# These are important project files that should be tracked
+# !MIGRATION_GUIDE.md
+# !PHASE_*_SUMMARY.md  
+# !FINAL_MIGRATION_JUDGMENT.md
+# !OFFERS_DISCOUNTS_MIGRATION_REPORT.md
