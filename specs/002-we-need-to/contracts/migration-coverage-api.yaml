@@ -1,0 +1,620 @@
+openapi: 3.0.3
+info:
+  title: Migration Coverage API
+  description: API for comprehensive migration scripts coverage tracking and validation
+  version: 1.0.0
+  contact:
+    name: Database Migration Team
+
+servers:
+  - url: http://localhost:3000/api
+    description: Local development server
+
+paths:
+  /coverage/summary:
+    get:
+      summary: Get overall migration coverage summary
+      description: Returns high-level statistics for all migration operations
+      operationId: getCoverageSummary
+      responses:
+        '200':
+          description: Coverage summary retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CoverageSummary'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /coverage/domain/{domain}:
+    get:
+      summary: Get domain-specific coverage
+      description: Returns detailed coverage information for a specific data domain
+      operationId: getDomainCoverage
+      parameters:
+        - name: domain
+          in: path
+          required: true
+          description: Data domain type
+          schema:
+            $ref: '#/components/schemas/DataDomainType'
+      responses:
+        '200':
+          description: Domain coverage retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DomainCoverage'
+        '404':
+          description: Domain not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /scripts:
+    get:
+      summary: List all migration scripts
+      description: Returns a paginated list of all migration scripts with their status
+      operationId: listMigrationScripts
+      parameters:
+        - name: category
+          in: query
+          description: Filter by script category
+          schema:
+            $ref: '#/components/schemas/ScriptCategory'
+        - name: status
+          in: query
+          description: Filter by migration status
+          schema:
+            $ref: '#/components/schemas/MigrationStatus'
+        - name: page
+          in: query
+          description: Page number for pagination
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: limit
+          in: query
+          description: Number of items per page
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: Scripts retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MigrationScriptList'
+
+  /scripts/{scriptId}/metrics:
+    get:
+      summary: Get script performance metrics
+      description: Returns detailed performance metrics for a specific migration script
+      operationId: getScriptMetrics
+      parameters:
+        - name: scriptId
+          in: path
+          required: true
+          description: Migration script ID
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Script metrics retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MigrationMetrics'
+        '404':
+          description: Script not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /entities/{domain}:
+    get:
+      summary: Get entities by domain
+      description: Returns all data entities within a specific domain
+      operationId: getEntitiesByDomain
+      parameters:
+        - name: domain
+          in: path
+          required: true
+          description: Data domain type
+          schema:
+            $ref: '#/components/schemas/DataDomainType'
+      responses:
+        '200':
+          description: Entities retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DataEntityList'
+
+  /validate/coverage:
+    post:
+      summary: Validate complete coverage
+      description: Validates that all required data has been migrated
+      operationId: validateCoverage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CoverageValidationRequest'
+      responses:
+        '200':
+          description: Coverage validation completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CoverageValidationResult'
+
+  /validate/integrity:
+    post:
+      summary: Check data integrity
+      description: Validates data integrity across all migrated entities
+      operationId: validateIntegrity
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IntegrityValidationRequest'
+      responses:
+        '200':
+          description: Integrity validation completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrityValidationResult'
+
+  /reports/generate:
+    post:
+      summary: Generate coverage report
+      description: Generates a comprehensive migration coverage report
+      operationId: generateCoverageReport
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReportGenerationRequest'
+      responses:
+        '201':
+          description: Report generation initiated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportGenerationResponse'
+
+components:
+  schemas:
+    DataDomainType:
+      type: string
+      enum:
+        - clinical
+        - business
+        - communications
+        - technical
+
+    ScriptCategory:
+      type: string
+      enum:
+        - core
+        - communications
+        - business
+        - specialized
+        - system
+        - critical_fix
+
+    MigrationStatus:
+      type: string
+      enum:
+        - not_started
+        - in_progress
+        - complete
+        - failed
+        - rollback_required
+
+    CoverageSummary:
+      type: object
+      required:
+        - totalScripts
+        - completedScripts
+        - totalRecords
+        - migratedRecords
+        - overallSuccessRate
+        - domainCoverage
+      properties:
+        totalScripts:
+          type: integer
+          minimum: 0
+          example: 43
+        completedScripts:
+          type: integer
+          minimum: 0
+          example: 43
+        totalRecords:
+          type: integer
+          minimum: 0
+          example: 1200000
+        migratedRecords:
+          type: integer
+          minimum: 0
+          example: 1188000
+        overallSuccessRate:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+          example: 0.99
+        domainCoverage:
+          type: object
+          properties:
+            clinical:
+              type: number
+              format: double
+              minimum: 0
+              maximum: 1
+              example: 0.995
+            business:
+              type: number
+              format: double
+              minimum: 0
+              maximum: 1
+              example: 0.998
+            communications:
+              type: number
+              format: double
+              minimum: 0
+              maximum: 1
+              example: 0.987
+            technical:
+              type: number
+              format: double
+              minimum: 0
+              maximum: 1
+              example: 0.992
+
+    DomainCoverage:
+      type: object
+      required:
+        - domain
+        - totalEntities
+        - migratedEntities
+        - coveragePercentage
+        - entities
+      properties:
+        domain:
+          $ref: '#/components/schemas/DataDomainType'
+        totalEntities:
+          type: integer
+          minimum: 0
+        migratedEntities:
+          type: integer
+          minimum: 0
+        coveragePercentage:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+        entities:
+          type: array
+          items:
+            $ref: '#/components/schemas/DataEntity'
+
+    MigrationScript:
+      type: object
+      required:
+        - id
+        - name
+        - category
+        - dataDomain
+        - status
+        - recordCount
+        - successRate
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: "office-migration.ts"
+        category:
+          $ref: '#/components/schemas/ScriptCategory'
+        dataDomain:
+          $ref: '#/components/schemas/DataDomainType'
+        sourceTable:
+          type: string
+          example: "dispatch_office"
+        targetTable:
+          type: string
+          example: "offices"
+        recordCount:
+          type: integer
+          minimum: 0
+          example: 7853
+        successRate:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+          example: 0.9999
+        status:
+          $ref: '#/components/schemas/MigrationStatus'
+        lastExecuted:
+          type: string
+          format: date-time
+
+    MigrationScriptList:
+      type: object
+      required:
+        - scripts
+        - pagination
+      properties:
+        scripts:
+          type: array
+          items:
+            $ref: '#/components/schemas/MigrationScript'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+
+    DataEntity:
+      type: object
+      required:
+        - id
+        - name
+        - domainId
+        - totalRecords
+        - migratedRecords
+        - failedRecords
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: "patients"
+        domainId:
+          type: string
+          format: uuid
+        legacyTable:
+          type: string
+          example: "dispatch_patient"
+        targetTable:
+          type: string
+          example: "patients"
+        totalRecords:
+          type: integer
+          minimum: 0
+        migratedRecords:
+          type: integer
+          minimum: 0
+        failedRecords:
+          type: integer
+          minimum: 0
+        migrationScriptId:
+          type: string
+          format: uuid
+
+    DataEntityList:
+      type: object
+      required:
+        - entities
+      properties:
+        entities:
+          type: array
+          items:
+            $ref: '#/components/schemas/DataEntity'
+
+    MigrationMetrics:
+      type: object
+      required:
+        - id
+        - scriptId
+        - executionDate
+        - recordsProcessed
+        - recordsSuccessful
+        - recordsFailed
+        - recordsSkipped
+        - executionTimeMs
+        - throughputPerSecond
+      properties:
+        id:
+          type: string
+          format: uuid
+        scriptId:
+          type: string
+          format: uuid
+        entityId:
+          type: string
+          format: uuid
+        executionDate:
+          type: string
+          format: date-time
+        recordsProcessed:
+          type: integer
+          minimum: 0
+        recordsSuccessful:
+          type: integer
+          minimum: 0
+        recordsFailed:
+          type: integer
+          minimum: 0
+        recordsSkipped:
+          type: integer
+          minimum: 0
+        executionTimeMs:
+          type: integer
+          minimum: 0
+        throughputPerSecond:
+          type: number
+          format: double
+          minimum: 0
+        errorDetails:
+          type: object
+          additionalProperties: true
+
+    CoverageValidationRequest:
+      type: object
+      required:
+        - domains
+        - minimumSuccessRate
+      properties:
+        domains:
+          type: array
+          items:
+            $ref: '#/components/schemas/DataDomainType'
+        minimumSuccessRate:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+          default: 0.99
+
+    CoverageValidationResult:
+      type: object
+      required:
+        - success
+        - overallCoverage
+        - domainResults
+      properties:
+        success:
+          type: boolean
+        overallCoverage:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+        domainResults:
+          type: array
+          items:
+            type: object
+            properties:
+              domain:
+                $ref: '#/components/schemas/DataDomainType'
+              coverage:
+                type: number
+                format: double
+                minimum: 0
+                maximum: 1
+              passed:
+                type: boolean
+              issues:
+                type: array
+                items:
+                  type: string
+
+    IntegrityValidationRequest:
+      type: object
+      properties:
+        entities:
+          type: array
+          items:
+            type: string
+        checkForeignKeys:
+          type: boolean
+          default: true
+        checkDataConsistency:
+          type: boolean
+          default: true
+
+    IntegrityValidationResult:
+      type: object
+      required:
+        - success
+        - validationResults
+      properties:
+        success:
+          type: boolean
+        validationResults:
+          type: array
+          items:
+            type: object
+            properties:
+              entity:
+                type: string
+              passed:
+                type: boolean
+              issues:
+                type: array
+                items:
+                  type: string
+
+    ReportGenerationRequest:
+      type: object
+      properties:
+        format:
+          type: string
+          enum: [json, markdown, pdf]
+          default: json
+        includeDomains:
+          type: array
+          items:
+            $ref: '#/components/schemas/DataDomainType'
+        includeMetrics:
+          type: boolean
+          default: true
+
+    ReportGenerationResponse:
+      type: object
+      required:
+        - reportId
+        - status
+      properties:
+        reportId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [pending, generating, completed, failed]
+        downloadUrl:
+          type: string
+          format: uri
+
+    Pagination:
+      type: object
+      required:
+        - page
+        - limit
+        - total
+        - totalPages
+      properties:
+        page:
+          type: integer
+          minimum: 1
+        limit:
+          type: integer
+          minimum: 1
+        total:
+          type: integer
+          minimum: 0
+        totalPages:
+          type: integer
+          minimum: 0
+
+    Error:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true

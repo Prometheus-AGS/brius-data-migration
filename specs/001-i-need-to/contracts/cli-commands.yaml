@@ -1,0 +1,432 @@
+openapi: 3.0.3
+info:
+  title: Database Migration and Synchronization CLI
+  description: Command line interface for differential database migration and synchronization
+  version: 1.0.0
+
+paths:
+  /differential-migration:
+    post:
+      summary: Execute differential migration
+      description: Migrate only new/missing records from source to target database
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                entities:
+                  type: array
+                  items:
+                    type: string
+                    enum: [offices, profiles, doctors, patients, orders, products, jaws, projects, treatment-plans]
+                  description: Entity types to migrate
+                batchSize:
+                  type: integer
+                  minimum: 1
+                  maximum: 1000
+                  default: 500
+                  description: Records to process per batch
+                dryRun:
+                  type: boolean
+                  default: false
+                  description: Validate without making changes
+              required:
+                - entities
+      responses:
+        200:
+          description: Migration completed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MigrationResult'
+        400:
+          description: Invalid request parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        500:
+          description: Migration failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /sync-scheduler:
+    post:
+      summary: Configure synchronization job
+      description: Set up scheduled synchronization between databases
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                jobName:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+                schedule:
+                  type: string
+                  pattern: '^(hourly|daily|weekly|\d+[hmw])$'
+                  description: Schedule frequency (hourly/daily/weekly or custom like "2h", "30m")
+                entities:
+                  type: array
+                  items:
+                    type: string
+                  description: Entity types to sync
+                conflictResolution:
+                  type: string
+                  enum: [source_wins, target_wins, manual]
+                  default: source_wins
+                maxRecords:
+                  type: integer
+                  minimum: 1000
+                  maximum: 100000
+                  default: 50000
+              required:
+                - jobName
+                - schedule
+                - entities
+      responses:
+        201:
+          description: Sync job created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncJobResult'
+        400:
+          description: Invalid job configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /sync-scheduler/{jobId}:
+    get:
+      summary: Get sync job status
+      description: Retrieve status and metrics for a synchronization job
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        200:
+          description: Job status retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncJobStatus'
+        404:
+          description: Job not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    delete:
+      summary: Cancel sync job
+      description: Stop and remove a synchronization job
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        204:
+          description: Job cancelled successfully
+        404:
+          description: Job not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /validation:
+    post:
+      summary: Validate data integrity
+      description: Comprehensive validation between source and target databases
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                validationType:
+                  type: string
+                  enum: [data_integrity, relationship_integrity, completeness_check, performance_check]
+                entities:
+                  type: array
+                  items:
+                    type: string
+                  description: Entity types to validate
+                samplingRate:
+                  type: number
+                  minimum: 0.01
+                  maximum: 1.0
+                  default: 1.0
+                  description: Fraction of records to validate (1.0 = all records)
+              required:
+                - validationType
+                - entities
+      responses:
+        200:
+          description: Validation completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationResult'
+        400:
+          description: Invalid validation parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    MigrationResult:
+      type: object
+      properties:
+        operationId:
+          type: string
+          format: uuid
+        totalProcessed:
+          type: integer
+        successful:
+          type: integer
+        failed:
+          type: integer
+        skipped:
+          type: integer
+        duration:
+          type: integer
+          description: Execution time in milliseconds
+        checkpoints:
+          type: array
+          items:
+            $ref: '#/components/schemas/MigrationCheckpoint'
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/MigrationError'
+      required:
+        - operationId
+        - totalProcessed
+        - successful
+        - failed
+        - skipped
+        - duration
+
+    SyncJobResult:
+      type: object
+      properties:
+        jobId:
+          type: string
+          format: uuid
+        jobName:
+          type: string
+        status:
+          type: string
+          enum: [scheduled, running, completed, failed, paused, cancelled]
+        nextRunAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - jobId
+        - jobName
+        - status
+        - createdAt
+
+    SyncJobStatus:
+      type: object
+      properties:
+        jobId:
+          type: string
+          format: uuid
+        jobName:
+          type: string
+        status:
+          type: string
+          enum: [scheduled, running, completed, failed, paused, cancelled]
+        lastRunAt:
+          type: string
+          format: date-time
+        nextRunAt:
+          type: string
+          format: date-time
+        totalRecordsSynced:
+          type: integer
+        successRate:
+          type: number
+          minimum: 0
+          maximum: 100
+        averageDuration:
+          type: integer
+          description: Average execution time in milliseconds
+        recentRuns:
+          type: array
+          items:
+            $ref: '#/components/schemas/SyncRunSummary'
+      required:
+        - jobId
+        - jobName
+        - status
+
+    ValidationResult:
+      type: object
+      properties:
+        validationId:
+          type: string
+          format: uuid
+        validationType:
+          type: string
+        recordsValidated:
+          type: integer
+        validationPassed:
+          type: boolean
+        discrepanciesFound:
+          type: integer
+        executionTime:
+          type: integer
+          description: Validation time in milliseconds
+        reports:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValidationReport'
+        generatedAt:
+          type: string
+          format: date-time
+      required:
+        - validationId
+        - validationType
+        - recordsValidated
+        - validationPassed
+        - discrepanciesFound
+        - executionTime
+        - generatedAt
+
+    MigrationCheckpoint:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        entityType:
+          type: string
+        lastProcessedId:
+          type: string
+        recordsProcessed:
+          type: integer
+        status:
+          type: string
+          enum: [pending, in_progress, completed, failed, paused]
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - entityType
+        - recordsProcessed
+        - status
+
+    MigrationError:
+      type: object
+      properties:
+        entityType:
+          type: string
+        legacyId:
+          type: string
+        errorCode:
+          type: string
+        errorMessage:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+      required:
+        - entityType
+        - legacyId
+        - errorCode
+        - errorMessage
+        - timestamp
+
+    ValidationReport:
+      type: object
+      properties:
+        entity:
+          type: string
+        recordsChecked:
+          type: integer
+        issuesFound:
+          type: integer
+        issues:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+              description:
+                type: string
+              affectedRecords:
+                type: integer
+      required:
+        - entity
+        - recordsChecked
+        - issuesFound
+
+    SyncRunSummary:
+      type: object
+      properties:
+        runId:
+          type: string
+          format: uuid
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+        recordsSynced:
+          type: integer
+        status:
+          type: string
+          enum: [completed, failed, cancelled]
+      required:
+        - runId
+        - startedAt
+        - recordsSynced
+        - status
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+        code:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+      required:
+        - error
+        - message
+        - timestamp

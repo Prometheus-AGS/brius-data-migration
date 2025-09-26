@@ -528,7 +528,7 @@ class OrdersMigrationService {
         SELECT COUNT(*) as count
         FROM orders o
         WHERE legacy_instruction_id IS NOT NULL
-          AND NOT EXISTS (SELECT 1 FROM profiles pr WHERE pr.id = o.doctor_id AND pr.profile_type = 'doctor')
+          AND NOT EXISTS (SELECT 1 FROM doctors d WHERE d.id = o.doctor_id)
       `);
 
       // Check for orders with amounts

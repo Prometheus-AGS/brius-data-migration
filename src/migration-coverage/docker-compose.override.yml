@@ -1,0 +1,45 @@
+# Docker Compose Development Overrides
+# This file is automatically loaded in development environments
+
+version: '3.8'
+
+services:
+  migration-coverage-api:
+    build:
+      target: builder  # Use builder stage with dev dependencies
+      dockerfile: Dockerfile
+    environment:
+      NODE_ENV: development
+      LOG_LEVEL: debug
+      ENABLE_DEVELOPMENT_ENDPOINTS: true
+      ENABLE_SWAGGER_UI: true
+      DEV_ENABLE_DEBUG_ENDPOINTS: true
+      DEV_ENABLE_MOCK_DATA: true
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/dist
+    command: npm run dev
+    ports:
+      - "3000:3000"
+      - "9229:9229"  # Node.js debugger port for IDE integration
+    restart: "no"     # Don't restart automatically in development
+
+  target-db:
+    environment:
+      POSTGRES_DB: migration_coverage_dev
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres  # Simple password for development
+    ports:
+      - "${DEV_TARGET_DB_PORT:-5433}:5432"  # Different port to avoid conflicts
+    volumes:
+      - dev_db_data:/var/lib/postgresql/data
+      - ./init-db-dev:/docker-entrypoint-initdb.d
+
+  redis:
+    ports:
+      - "6380:6379"  # Different port for development
+
+volumes:
+  dev_db_data:
+    driver: local

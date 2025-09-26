@@ -1,0 +1,152 @@
+# Migration Coverage API Docker Compose Configuration
+version: '3.8'
+
+services:
+  # Migration Coverage API
+  migration-coverage-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: migration-coverage-api
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      PORT: 3000
+
+      # Source Database (Legacy System)
+      SOURCE_DB_HOST: ${SOURCE_DB_HOST}
+      SOURCE_DB_PORT: ${SOURCE_DB_PORT:-5432}
+      SOURCE_DB_NAME: ${SOURCE_DB_NAME}
+      SOURCE_DB_USER: ${SOURCE_DB_USER}
+      SOURCE_DB_PASSWORD: ${SOURCE_DB_PASSWORD}
+      SOURCE_DB_SSL: ${SOURCE_DB_SSL:-false}
+
+      # Target Database (Modern System)
+      TARGET_DB_HOST: target-db
+      TARGET_DB_PORT: 5432
+      TARGET_DB_NAME: ${TARGET_DB_NAME:-postgres}
+      TARGET_DB_USER: ${TARGET_DB_USER:-postgres}
+      TARGET_DB_PASSWORD: ${TARGET_DB_PASSWORD:-postgres}
+      TARGET_DB_SSL: false
+
+      # Optional API Key
+      API_KEY: ${API_KEY}
+
+      # CORS Configuration
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost:8080}
+
+    volumes:
+      - ./reports:/app/reports
+      - ./logs:/app/logs
+    depends_on:
+      target-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      - migration-network
+
+  # Target Database (PostgreSQL for modern system)
+  target-db:
+    image: postgres:15-alpine
+    container_name: migration-target-db
+    environment:
+      POSTGRES_DB: ${TARGET_DB_NAME:-postgres}
+      POSTGRES_USER: ${TARGET_DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${TARGET_DB_PASSWORD:-postgres}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --locale=C"
+    ports:
+      - "${TARGET_DB_PORT:-5432}:5432"
+    volumes:
+      - target_db_data:/var/lib/postgresql/data
+      - ./init-db:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${TARGET_DB_USER:-postgres} -d ${TARGET_DB_NAME:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - migration-network
+
+  # Redis for caching and job queue (optional)
+  redis:
+    image: redis:7-alpine
+    container_name: migration-redis
+    command: redis-server --appendonly yes
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - migration-network
+
+  # Nginx reverse proxy (for production)
+  nginx:
+    image: nginx:alpine
+    container_name: migration-nginx
+    ports:
+      - "${NGINX_PORT:-80}:80"
+      - "${NGINX_SSL_PORT:-443}:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - ./nginx/logs:/var/log/nginx
+    depends_on:
+      - migration-coverage-api
+    restart: unless-stopped
+    networks:
+      - migration-network
+    profiles:
+      - production
+
+# Volumes
+volumes:
+  target_db_data:
+    driver: local
+  redis_data:
+    driver: local
+
+# Networks
+networks:
+  migration-network:
+    driver: bridge
+
+---
+# Development Override (docker-compose.override.yml)
+# This file is automatically loaded in development
+version: '3.8'
+
+services:
+  migration-coverage-api:
+    build:
+      target: builder  # Use builder stage for development
+    environment:
+      NODE_ENV: development
+    volumes:
+      - .:/app
+      - /app/node_modules
+    command: npm run dev
+    ports:
+      - "3000:3000"
+      - "9229:9229"  # Node.js debugger port
+
+  target-db:
+    environment:
+      POSTGRES_DB: migration_coverage_dev
+    ports:
+      - "5433:5432"  # Different port to avoid conflicts
