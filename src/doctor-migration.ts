@@ -470,9 +470,9 @@ class DoctorMigrationService {
       `);
 
       const targetOfficeRelations = await this.targetPool.query(`
-        SELECT COUNT(*) as count 
-        FROM doctor_offices do
-        JOIN profiles p ON do.doctor_id = p.id
+        SELECT COUNT(*) as count
+        FROM doctor_offices doc_off
+        JOIN profiles p ON doc_off.doctor_id = p.id
         WHERE p.legacy_user_id IS NOT NULL
       `);
 
@@ -485,19 +485,19 @@ class DoctorMigrationService {
       const doctorsWithoutOffices = await this.targetPool.query(`
         SELECT COUNT(*) as count
         FROM profiles p
-        WHERE p.profile_type = 'doctor' 
+        WHERE p.profile_type = 'doctor'
           AND p.legacy_user_id IS NOT NULL
           AND NOT EXISTS (
-            SELECT 1 FROM doctor_offices do WHERE do.doctor_id = p.id
+            SELECT 1 FROM doctor_offices doc_off WHERE doc_off.doctor_id = p.id
           )
       `);
 
       // Check for invalid office references
       const invalidOfficeRefs = await this.targetPool.query(`
         SELECT COUNT(*) as count
-        FROM doctor_offices do
-        WHERE NOT EXISTS (SELECT 1 FROM offices o WHERE o.id = do.office_id)
-           OR NOT EXISTS (SELECT 1 FROM profiles p WHERE p.id = do.doctor_id)
+        FROM doctor_offices doc_off
+        WHERE NOT EXISTS (SELECT 1 FROM offices o WHERE o.id = doc_off.office_id)
+           OR NOT EXISTS (SELECT 1 FROM profiles p WHERE p.id = doc_off.doctor_id)
       `);
 
       const validation = {

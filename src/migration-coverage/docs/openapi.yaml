@@ -1,0 +1,1333 @@
+openapi: 3.0.3
+info:
+  title: Migration Coverage API
+  version: 1.0.0
+  description: |
+    Comprehensive API for tracking and validating database migration coverage across clinical, business, communications, and technical data domains.
+
+    This API provides real-time visibility into migration progress, data integrity validation, and comprehensive reporting for large-scale database migrations.
+
+  contact:
+    name: Migration Coverage API Support
+    email: support@example.com
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: http://localhost:3000
+    description: Development server
+  - url: https://api.migration-coverage.example.com
+    description: Production server
+
+paths:
+  /health:
+    get:
+      tags:
+        - System
+      summary: Health check endpoint
+      description: Returns the current health status of the API and all its components
+      responses:
+        '200':
+          description: System is healthy or degraded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+              examples:
+                healthy:
+                  summary: Healthy system
+                  value:
+                    status: healthy
+                    timestamp: "2024-01-15T10:30:00.000Z"
+                    uptime: 3600
+                    version: "1.0.0"
+                    environment: production
+                    components:
+                      - component: database
+                        status: healthy
+                        responseTime: 25
+                        details:
+                          connected: true
+                          activeConnections: 5
+                    systemMetrics:
+                      nodeVersion: "v18.17.0"
+                      platform: linux
+                      arch: x64
+                      memoryUsage:
+                        rss: 128
+                        heapTotal: 64
+                        heapUsed: 32
+                        external: 8
+                      processId: 12345
+                    responseTime: 45
+        '503':
+          description: System is unhealthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+
+  /coverage/summary:
+    get:
+      tags:
+        - Coverage
+      summary: Get migration coverage summary
+      description: Returns high-level coverage summary across all migration domains
+      responses:
+        '200':
+          description: Coverage summary data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CoverageSummary'
+              example:
+                totalScripts: 42
+                completedScripts: 38
+                totalRecords: 1250000
+                migratedRecords: 1187500
+                overallSuccessRate: 98.75
+                domainCoverage:
+                  clinical: 99.2
+                  business: 97.8
+                  communications: 89.5
+                  technical: 95.0
+                riskAssessment:
+                  level: low
+                  score: 0.15
+                timeline:
+                  estimatedCompletionDays: 3
+                  confidence: 0.85
+                lastUpdated: "2024-01-15T10:30:00.000Z"
+                responseTime: 150
+
+  /scripts/status:
+    get:
+      tags:
+        - Scripts
+      summary: Get migration scripts status
+      description: Returns detailed status of all migration scripts with filtering and pagination
+      parameters:
+        - name: domain
+          in: query
+          description: Filter by data domain
+          schema:
+            type: string
+            enum: [clinical, business, communications, technical]
+        - name: category
+          in: query
+          description: Filter by script category
+          schema:
+            type: string
+            enum: [core, business, communications, specialized, system, critical-fix]
+        - name: status
+          in: query
+          description: Filter by migration status
+          schema:
+            type: string
+            enum: [pending, in_progress, completed, failed]
+        - name: page
+          in: query
+          description: Page number for pagination
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: limit
+          in: query
+          description: Number of items per page
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: includeMetrics
+          in: query
+          description: Include code metrics for each script
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Scripts status data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScriptsStatus'
+        '400':
+          description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /domains/coverage:
+    get:
+      tags:
+        - Domains
+      summary: Get domain coverage analysis
+      description: Returns coverage analysis broken down by data domain
+      parameters:
+        - name: domain
+          in: query
+          description: Filter by specific domain
+          schema:
+            type: string
+            enum: [clinical, business, communications, technical]
+        - name: includeDetails
+          in: query
+          description: Include detailed entity information
+          schema:
+            type: boolean
+            default: false
+        - name: includeValidation
+          in: query
+          description: Include validation results
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Domain coverage data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DomainsCoverage'
+        '400':
+          description: Invalid domain name
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /entities/performance:
+    get:
+      tags:
+        - Entities
+      summary: Get entity performance metrics
+      description: Returns performance metrics for individual data entities
+      parameters:
+        - name: domain
+          in: query
+          description: Filter by domain
+          schema:
+            type: string
+            enum: [clinical, business, communications, technical]
+        - name: minSuccessRate
+          in: query
+          description: Filter by minimum success rate percentage
+          schema:
+            type: number
+            minimum: 0
+            maximum: 100
+        - name: minRecords
+          in: query
+          description: Filter by minimum record count
+          schema:
+            type: integer
+            minimum: 0
+        - name: sortBy
+          in: query
+          description: Sort field
+          schema:
+            type: string
+            enum: [successRate, totalRecords, migratedRecords, entityName, lastMigrated]
+            default: successRate
+        - name: sortOrder
+          in: query
+          description: Sort order
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+        - name: page
+          in: query
+          description: Page number
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: limit
+          in: query
+          description: Items per page
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: includeValidation
+          in: query
+          description: Include validation results
+          schema:
+            type: boolean
+            default: false
+        - name: includeHistory
+          in: query
+          description: Include migration history
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Entity performance data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntitiesPerformance'
+        '400':
+          description: Invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /validation/run:
+    post:
+      tags:
+        - Validation
+      summary: Run migration validation
+      description: Initiates a comprehensive validation of migration data
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ValidationRequest'
+            example:
+              entities: ["patients", "orders", "doctors"]
+              includeIntegrityChecks: true
+              includeCrossEntity: true
+      responses:
+        '202':
+          description: Validation job accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationJobResponse'
+              example:
+                jobId: "123e4567-e89b-12d3-a456-426614174000"
+                status: accepted
+                message: "Validation job started"
+                estimatedDuration: "2 minutes"
+                pollUrl: "/validation/results/123e4567-e89b-12d3-a456-426614174000"
+                timestamp: "2024-01-15T10:30:00.000Z"
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /validation/results/{id}:
+    get:
+      tags:
+        - Validation
+      summary: Get validation results
+      description: Returns validation results for a specific job
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Validation job ID
+          schema:
+            type: string
+            format: uuid
+        - name: includeDetails
+          in: query
+          description: Include detailed validation results
+          schema:
+            type: boolean
+            default: false
+        - name: format
+          in: query
+          description: Response format
+          schema:
+            type: string
+            enum: [json, report]
+            default: json
+      responses:
+        '200':
+          description: Validation results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationResults'
+            text/markdown:
+              schema:
+                type: string
+                description: Validation report in Markdown format
+        '404':
+          description: Validation job not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /reports/generate:
+    get:
+      tags:
+        - Reports
+      summary: Generate migration reports
+      description: Generates comprehensive migration reports in various formats
+      parameters:
+        - name: type
+          in: query
+          description: Report type
+          schema:
+            type: string
+            enum: [comprehensive, coverage, validation, executive, detailed]
+            default: comprehensive
+        - name: format
+          in: query
+          description: Output format
+          schema:
+            type: string
+            enum: [json, html, markdown, csv]
+            default: json
+        - name: includeCharts
+          in: query
+          description: Include charts and visualizations
+          schema:
+            type: boolean
+            default: false
+        - name: includeDetails
+          in: query
+          description: Include detailed information
+          schema:
+            type: boolean
+            default: false
+        - name: includeValidation
+          in: query
+          description: Include validation results
+          schema:
+            type: boolean
+            default: false
+        - name: saveToFile
+          in: query
+          description: Save report to file
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Generated report
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportResponse'
+            text/html:
+              schema:
+                type: string
+                description: HTML report
+            text/markdown:
+              schema:
+                type: string
+                description: Markdown report
+            text/csv:
+              schema:
+                type: string
+                description: CSV report
+        '400':
+          description: Invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      required:
+        - status
+        - timestamp
+        - uptime
+        - version
+        - environment
+        - components
+        - systemMetrics
+        - responseTime
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+          description: Overall system health status
+        timestamp:
+          type: string
+          format: date-time
+          description: Timestamp of health check
+        uptime:
+          type: number
+          description: Server uptime in seconds
+        version:
+          type: string
+          description: API version
+        environment:
+          type: string
+          description: Runtime environment
+        components:
+          type: array
+          items:
+            $ref: '#/components/schemas/ComponentHealth'
+        systemMetrics:
+          $ref: '#/components/schemas/SystemMetrics'
+        responseTime:
+          type: number
+          description: Health check response time in milliseconds
+
+    ComponentHealth:
+      type: object
+      required:
+        - component
+        - status
+        - responseTime
+      properties:
+        component:
+          type: string
+          description: Component name
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+        responseTime:
+          type: number
+          description: Component response time in milliseconds
+        details:
+          type: object
+          description: Component-specific details
+        error:
+          type: string
+          description: Error message if component is unhealthy
+
+    SystemMetrics:
+      type: object
+      required:
+        - nodeVersion
+        - platform
+        - arch
+        - memoryUsage
+        - processId
+      properties:
+        nodeVersion:
+          type: string
+        platform:
+          type: string
+        arch:
+          type: string
+        cpuUsage:
+          type: object
+          properties:
+            user:
+              type: number
+            system:
+              type: number
+        memoryUsage:
+          type: object
+          properties:
+            rss:
+              type: number
+              description: Resident Set Size in MB
+            heapTotal:
+              type: number
+              description: Total heap size in MB
+            heapUsed:
+              type: number
+              description: Used heap size in MB
+            external:
+              type: number
+              description: External memory in MB
+        processId:
+          type: number
+
+    CoverageSummary:
+      type: object
+      required:
+        - totalScripts
+        - completedScripts
+        - totalRecords
+        - migratedRecords
+        - overallSuccessRate
+        - domainCoverage
+        - riskAssessment
+        - timeline
+        - lastUpdated
+        - responseTime
+      properties:
+        totalScripts:
+          type: integer
+          minimum: 0
+          description: Total number of migration scripts
+        completedScripts:
+          type: integer
+          minimum: 0
+          description: Number of completed scripts
+        totalRecords:
+          type: integer
+          minimum: 0
+          description: Total records to migrate
+        migratedRecords:
+          type: integer
+          minimum: 0
+          description: Records successfully migrated
+        overallSuccessRate:
+          type: number
+          minimum: 0
+          maximum: 100
+          description: Overall success rate percentage
+        domainCoverage:
+          type: object
+          required:
+            - clinical
+            - business
+            - communications
+            - technical
+          properties:
+            clinical:
+              type: number
+              minimum: 0
+              maximum: 100
+            business:
+              type: number
+              minimum: 0
+              maximum: 100
+            communications:
+              type: number
+              minimum: 0
+              maximum: 100
+            technical:
+              type: number
+              minimum: 0
+              maximum: 100
+        riskAssessment:
+          type: object
+          required:
+            - level
+            - score
+          properties:
+            level:
+              type: string
+              enum: [low, medium, high]
+            score:
+              type: number
+              minimum: 0
+              maximum: 1
+        timeline:
+          type: object
+          required:
+            - estimatedCompletionDays
+            - confidence
+          properties:
+            estimatedCompletionDays:
+              type: integer
+              minimum: 0
+              nullable: true
+            confidence:
+              type: number
+              minimum: 0
+              maximum: 1
+        lastUpdated:
+          type: string
+          format: date-time
+        responseTime:
+          type: number
+
+    ScriptsStatus:
+      type: object
+      required:
+        - scripts
+        - pagination
+        - summary
+        - filters
+        - lastUpdated
+        - responseTime
+      properties:
+        scripts:
+          type: array
+          items:
+            $ref: '#/components/schemas/MigrationScript'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+        summary:
+          $ref: '#/components/schemas/ScriptsSummary'
+        filters:
+          type: object
+          properties:
+            domain:
+              type: string
+              nullable: true
+            category:
+              type: string
+              nullable: true
+            status:
+              type: string
+              nullable: true
+        lastUpdated:
+          type: string
+          format: date-time
+        responseTime:
+          type: number
+
+    MigrationScript:
+      type: object
+      required:
+        - id
+        - name
+        - status
+        - domain
+        - category
+        - description
+        - filePath
+        - estimatedRecords
+        - recordsProcessed
+        - successRate
+        - lastExecuted
+        - dependencies
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        status:
+          type: string
+          enum: [pending, in_progress, completed, failed]
+        domain:
+          type: string
+          enum: [clinical, business, communications, technical]
+        category:
+          type: string
+        description:
+          type: string
+        filePath:
+          type: string
+        estimatedRecords:
+          type: integer
+          minimum: 0
+        recordsProcessed:
+          type: integer
+          minimum: 0
+        successRate:
+          type: number
+          minimum: 0
+          maximum: 100
+          nullable: true
+        lastExecuted:
+          type: string
+          format: date-time
+          nullable: true
+        dependencies:
+          type: array
+          items:
+            type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        metrics:
+          type: object
+          properties:
+            linesOfCode:
+              type: integer
+            cyclomaticComplexity:
+              type: number
+            maintainabilityIndex:
+              type: number
+
+    ScriptsSummary:
+      type: object
+      required:
+        - totalScripts
+        - completedScripts
+        - inProgressScripts
+        - pendingScripts
+        - failedScripts
+        - averageSuccessRate
+        - domainBreakdown
+        - categoryBreakdown
+      properties:
+        totalScripts:
+          type: integer
+          minimum: 0
+        completedScripts:
+          type: integer
+          minimum: 0
+        inProgressScripts:
+          type: integer
+          minimum: 0
+        pendingScripts:
+          type: integer
+          minimum: 0
+        failedScripts:
+          type: integer
+          minimum: 0
+        averageSuccessRate:
+          type: number
+          minimum: 0
+          maximum: 100
+        domainBreakdown:
+          type: object
+          additionalProperties:
+            type: integer
+        categoryBreakdown:
+          type: object
+          additionalProperties:
+            type: integer
+
+    DomainsCoverage:
+      type: object
+      required:
+        - domains
+        - summary
+        - trends
+        - insights
+        - metadata
+      properties:
+        domains:
+          type: array
+          items:
+            $ref: '#/components/schemas/DomainCoverage'
+        summary:
+          $ref: '#/components/schemas/DomainsSummary'
+        trends:
+          $ref: '#/components/schemas/DomainTrends'
+        insights:
+          type: array
+          items:
+            type: string
+        metadata:
+          $ref: '#/components/schemas/DomainsMetadata'
+
+    DomainCoverage:
+      type: object
+      required:
+        - domain
+        - totalScripts
+        - completedScripts
+        - totalRecords
+        - migratedRecords
+        - coverage
+        - averageSuccessRate
+        - status
+        - priority
+        - lastUpdated
+      properties:
+        domain:
+          type: string
+          enum: [clinical, business, communications, technical]
+        totalScripts:
+          type: integer
+          minimum: 0
+        completedScripts:
+          type: integer
+          minimum: 0
+        totalRecords:
+          type: integer
+          minimum: 0
+        migratedRecords:
+          type: integer
+          minimum: 0
+        coverage:
+          type: number
+          minimum: 0
+          maximum: 100
+        averageSuccessRate:
+          type: number
+          minimum: 0
+          maximum: 100
+        status:
+          type: string
+          enum: [excellent, good, fair, needs_attention, critical]
+        priority:
+          type: string
+          enum: [critical, high, medium, low]
+        lastUpdated:
+          type: string
+          format: date-time
+
+    EntitiesPerformance:
+      type: object
+      required:
+        - entities
+        - pagination
+        - summary
+        - insights
+        - filters
+        - metadata
+      properties:
+        entities:
+          type: array
+          items:
+            $ref: '#/components/schemas/EntityPerformance'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+        summary:
+          $ref: '#/components/schemas/EntitiesSummary'
+        insights:
+          type: array
+          items:
+            type: string
+        filters:
+          type: object
+        metadata:
+          type: object
+
+    EntityPerformance:
+      type: object
+      required:
+        - entityName
+        - domainId
+        - totalRecords
+        - migratedRecords
+        - failedRecords
+        - successRate
+        - migrationRate
+        - errorRate
+        - status
+        - lastMigrated
+        - performance
+      properties:
+        entityName:
+          type: string
+        domainId:
+          type: string
+        totalRecords:
+          type: integer
+          minimum: 0
+        migratedRecords:
+          type: integer
+          minimum: 0
+        failedRecords:
+          type: integer
+          minimum: 0
+        successRate:
+          type: number
+          minimum: 0
+          maximum: 100
+        migrationRate:
+          type: number
+          minimum: 0
+          maximum: 100
+        errorRate:
+          type: number
+          minimum: 0
+          maximum: 100
+        status:
+          type: string
+          enum: [completed, nearly_complete, in_progress, partial, pending]
+        lastMigrated:
+          type: string
+          format: date-time
+          nullable: true
+        performance:
+          $ref: '#/components/schemas/PerformanceMetrics'
+
+    PerformanceMetrics:
+      type: object
+      required:
+        - score
+        - grade
+        - factors
+      properties:
+        score:
+          type: number
+          minimum: 0
+          maximum: 100
+        grade:
+          type: string
+        factors:
+          type: object
+          required:
+            - completeness
+            - accuracy
+            - efficiency
+          properties:
+            completeness:
+              type: number
+              minimum: 0
+              maximum: 100
+            accuracy:
+              type: number
+              minimum: 0
+              maximum: 100
+            efficiency:
+              type: number
+              minimum: 0
+              maximum: 100
+
+    ValidationRequest:
+      type: object
+      properties:
+        entities:
+          type: array
+          items:
+            type: string
+          description: List of entities to validate
+        includeIntegrityChecks:
+          type: boolean
+          default: true
+          description: Include data integrity checks
+        includeCrossEntity:
+          type: boolean
+          default: true
+          description: Include cross-entity validation
+
+    ValidationJobResponse:
+      type: object
+      required:
+        - jobId
+        - status
+        - message
+        - estimatedDuration
+        - pollUrl
+        - timestamp
+      properties:
+        jobId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [accepted]
+        message:
+          type: string
+        estimatedDuration:
+          type: string
+        pollUrl:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+
+    ValidationResults:
+      type: object
+      required:
+        - jobId
+        - status
+        - startTime
+        - summary
+        - integrityChecks
+        - recommendations
+        - timestamp
+      properties:
+        jobId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [pending, running, completed, failed]
+        startTime:
+          type: string
+          format: date-time
+        endTime:
+          type: string
+          format: date-time
+          nullable: true
+        duration:
+          type: number
+          nullable: true
+        summary:
+          $ref: '#/components/schemas/ValidationSummary'
+        integrityChecks:
+          type: object
+          required:
+            - total
+            - passed
+            - failed
+          properties:
+            total:
+              type: integer
+              minimum: 0
+            passed:
+              type: integer
+              minimum: 0
+            failed:
+              type: integer
+              minimum: 0
+        recommendations:
+          type: array
+          items:
+            type: string
+        timestamp:
+          type: string
+          format: date-time
+
+    ValidationSummary:
+      type: object
+      required:
+        - totalRules
+        - passedRules
+        - failedRules
+        - criticalFailures
+        - warningCount
+        - overallScore
+        - executionTime
+      properties:
+        totalRules:
+          type: integer
+          minimum: 0
+        passedRules:
+          type: integer
+          minimum: 0
+        failedRules:
+          type: integer
+          minimum: 0
+        criticalFailures:
+          type: integer
+          minimum: 0
+        warningCount:
+          type: integer
+          minimum: 0
+        overallScore:
+          type: number
+          minimum: 0
+          maximum: 100
+        executionTime:
+          type: number
+
+    ReportResponse:
+      type: object
+      required:
+        - reportType
+        - format
+        - generatedAt
+        - responseTime
+        - metadata
+        - content
+      properties:
+        reportType:
+          type: string
+          enum: [comprehensive, coverage, validation, executive, detailed]
+        format:
+          type: string
+          enum: [json, html, markdown, csv]
+        generatedAt:
+          type: string
+          format: date-time
+        responseTime:
+          type: number
+        savedPath:
+          type: string
+          nullable: true
+        metadata:
+          type: object
+          required:
+            - totalScripts
+            - totalEntities
+            - includeCharts
+            - includeDetails
+            - includeValidation
+          properties:
+            totalScripts:
+              type: integer
+            totalEntities:
+              type: integer
+            includeCharts:
+              type: boolean
+            includeDetails:
+              type: boolean
+            includeValidation:
+              type: boolean
+        content:
+          type: object
+          description: Report content (varies by report type)
+
+    Pagination:
+      type: object
+      required:
+        - currentPage
+        - totalPages
+        - totalItems
+        - itemsPerPage
+        - hasNextPage
+        - hasPreviousPage
+      properties:
+        currentPage:
+          type: integer
+          minimum: 1
+        totalPages:
+          type: integer
+          minimum: 0
+        totalItems:
+          type: integer
+          minimum: 0
+        itemsPerPage:
+          type: integer
+          minimum: 1
+        hasNextPage:
+          type: boolean
+        hasPreviousPage:
+          type: boolean
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+        - message
+        - timestamp
+      properties:
+        error:
+          type: string
+          description: Error type
+        message:
+          type: string
+          description: Error message
+        details:
+          type: object
+          description: Additional error details
+        timestamp:
+          type: string
+          format: date-time
+        requestId:
+          type: string
+          description: Request identifier for debugging
+        path:
+          type: string
+          description: Request path
+        method:
+          type: string
+          description: HTTP method
+
+    DomainsSummary:
+      type: object
+      required:
+        - totalDomains
+        - totalScripts
+        - completedScripts
+        - totalRecords
+        - migratedRecords
+        - overallCoverage
+        - overallMigrationRate
+        - averageSuccessRate
+      properties:
+        totalDomains:
+          type: integer
+        totalScripts:
+          type: integer
+        completedScripts:
+          type: integer
+        totalRecords:
+          type: integer
+        migratedRecords:
+          type: integer
+        overallCoverage:
+          type: number
+          minimum: 0
+          maximum: 100
+        overallMigrationRate:
+          type: number
+          minimum: 0
+          maximum: 100
+        averageSuccessRate:
+          type: number
+          minimum: 0
+          maximum: 100
+
+    DomainTrends:
+      type: object
+      required:
+        - improvingDomains
+        - decliningDomains
+        - stableDomains
+      properties:
+        improvingDomains:
+          type: array
+          items:
+            type: string
+        decliningDomains:
+          type: array
+          items:
+            type: string
+        stableDomains:
+          type: array
+          items:
+            type: string
+
+    DomainsMetadata:
+      type: object
+      required:
+        - includeDetails
+        - includeValidation
+        - filteredDomain
+        - lastUpdated
+        - responseTime
+      properties:
+        includeDetails:
+          type: boolean
+        includeValidation:
+          type: boolean
+        filteredDomain:
+          type: string
+          nullable: true
+        lastUpdated:
+          type: string
+          format: date-time
+        responseTime:
+          type: number
+
+    EntitiesSummary:
+      type: object
+      required:
+        - totalEntities
+        - averageSuccessRate
+        - totalRecords
+        - totalMigratedRecords
+        - totalFailedRecords
+        - performanceDistribution
+        - topPerformers
+        - needsAttention
+      properties:
+        totalEntities:
+          type: integer
+        averageSuccessRate:
+          type: number
+        totalRecords:
+          type: integer
+        totalMigratedRecords:
+          type: integer
+        totalFailedRecords:
+          type: integer
+        performanceDistribution:
+          type: object
+          required:
+            - excellent
+            - good
+            - fair
+            - poor
+          properties:
+            excellent:
+              type: integer
+            good:
+              type: integer
+            fair:
+              type: integer
+            poor:
+              type: integer
+        topPerformers:
+          type: array
+          items:
+            type: object
+            properties:
+              entityName:
+                type: string
+              successRate:
+                type: number
+        needsAttention:
+          type: integer
+
+tags:
+  - name: System
+    description: System health and status endpoints
+  - name: Coverage
+    description: Migration coverage tracking and summary
+  - name: Scripts
+    description: Migration script status and analysis
+  - name: Domains
+    description: Data domain coverage analysis
+  - name: Entities
+    description: Entity performance and metrics
+  - name: Validation
+    description: Data validation and integrity checks
+  - name: Reports
+    description: Report generation and export

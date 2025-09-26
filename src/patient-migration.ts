@@ -375,26 +375,28 @@ class PatientMigrationService {
    * Update orders to link to patient profile
    */
   private async linkOrdersToPatient(patientProfileId: string, legacyPatientId: number): Promise<number> {
-    const updateQuery = `
-      UPDATE orders 
-      SET patient_id = $1 
-      WHERE legacy_instruction_id IN (
-        SELECT id FROM dispatch_instruction 
-        WHERE patient_id = $2
-      ) AND patient_id IS NULL
-    `;
-
     try {
-      const result = await this.sourcePool.query(
+      // First get instruction IDs from source database
+      const instructionResult = await this.sourcePool.query(
         'SELECT id FROM dispatch_instruction WHERE patient_id = $1',
         [legacyPatientId]
       );
-      
-      if (result.rows.length > 0) {
-        const updateResult = await this.targetPool.query(updateQuery, [patientProfileId, legacyPatientId]);
-        return updateResult.rowCount || 0;
+
+      if (instructionResult.rows.length === 0) {
+        return 0;
       }
-      return 0;
+
+      const instructionIds = instructionResult.rows.map(row => row.id);
+
+      // Update orders in target database using the instruction IDs
+      const updateQuery = `
+        UPDATE orders
+        SET patient_id = $1
+        WHERE legacy_instruction_id = ANY($2) AND patient_id IS NULL
+      `;
+
+      const updateResult = await this.targetPool.query(updateQuery, [patientProfileId, instructionIds]);
+      return updateResult.rowCount || 0;
     } catch (error) {
       console.error(`❌ Error linking orders to patient ${patientProfileId}:`, error);
       return 0;
@@ -402,29 +404,33 @@ class PatientMigrationService {
   }
 
   /**
-   * Update treatments to link to patient profile
+   * Update treatment plans to link to patient profile
    */
   private async linkTreatmentsToPatient(patientProfileId: string, legacyPatientId: number): Promise<number> {
-    const updateQuery = `
-      UPDATE treatments 
-      SET patient_id = $1 
-      WHERE legacy_plan_id IN (
-        SELECT id FROM dispatch_plan 
-        WHERE patient_id = $2
-      ) AND patient_id IS NULL
-    `;
-
     try {
-      const result = await this.sourcePool.query(
-        'SELECT id FROM dispatch_plan WHERE patient_id = $1',
-        [legacyPatientId]
-      );
-      
-      if (result.rows.length > 0) {
-        const updateResult = await this.targetPool.query(updateQuery, [patientProfileId, legacyPatientId]);
-        return updateResult.rowCount || 0;
+      // First get plan IDs from source database by joining with dispatch_instruction
+      const planResult = await this.sourcePool.query(`
+        SELECT dp.id
+        FROM dispatch_plan dp
+        INNER JOIN dispatch_instruction di ON dp.instruction_id = di.id
+        WHERE di.patient_id = $1
+      `, [legacyPatientId]);
+
+      if (planResult.rows.length === 0) {
+        return 0;
       }
-      return 0;
+
+      const planIds = planResult.rows.map(row => row.id);
+
+      // Update treatment_plans in target database using the plan IDs
+      const updateQuery = `
+        UPDATE treatment_plans
+        SET patient_id = $1
+        WHERE legacy_plan_id = ANY($2) AND patient_id IS NULL
+      `;
+
+      const updateResult = await this.targetPool.query(updateQuery, [patientProfileId, planIds]);
+      return updateResult.rowCount || 0;
     } catch (error) {
       console.error(`❌ Error linking treatments to patient ${patientProfileId}:`, error);
       return 0;
