@@ -172,26 +172,64 @@ class DoctorMigrationService {
   }
 
   /**
-   * Create doctor profile if it doesn't exist
+   * Create doctor profile and doctor record if they don't exist
    */
   private async ensureDoctorProfile(doctorData: LegacyDoctorData): Promise<string | null> {
-    // First check if profile already exists
-    let doctorId = await this.getDoctorProfileId(doctorData.user_id);
-    
+    // First check if doctor record already exists in doctors table
+    let doctorId = await this.getDoctorId(doctorData.user_id);
+
     if (doctorId) {
       this.stats.doctorProfilesSkipped++;
       return doctorId;
     }
 
-    // Create new doctor profile
+    // Check if profile exists but doctor record doesn't
+    let profileId = await this.getDoctorProfileId(doctorData.user_id);
+
+    if (!profileId) {
+      // Create new doctor profile first
+      profileId = await this.createDoctorProfile(doctorData);
+      if (!profileId) {
+        return null;
+      }
+    }
+
+    // Create doctor record in doctors table
+    doctorId = await this.createDoctorRecord(doctorData, profileId);
+    return doctorId;
+  }
+
+  /**
+   * Check if doctor record exists in doctors table
+   */
+  private async getDoctorId(legacyUserId: number): Promise<string | null> {
+    const query = `
+      SELECT id
+      FROM doctors
+      WHERE legacy_user_id = $1
+    `;
+
+    try {
+      const result = await this.targetPool.query(query, [legacyUserId]);
+      return result.rows.length > 0 ? result.rows[0].id : null;
+    } catch (error) {
+      console.error('❌ Error checking existing doctor record:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Create doctor profile in profiles table
+   */
+  private async createDoctorProfile(doctorData: LegacyDoctorData): Promise<string | null> {
     const insertQuery = `
       INSERT INTO profiles (
         profile_type, first_name, last_name, email, username, password_hash,
-        is_active, is_verified, archived, suspended, 
+        is_active, is_verified, archived, suspended,
         metadata, legacy_user_id, created_at, updated_at
       ) VALUES (
         'doctor', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW()
-      ) 
+      )
       RETURNING id
     `;
 
@@ -247,10 +285,55 @@ class DoctorMigrationService {
 
     try {
       const result = await this.targetPool.query(insertQuery, values);
-      this.stats.doctorProfilesCreated++;
       return result.rows[0].id;
     } catch (error) {
       console.error(`❌ Error creating doctor profile for user ${doctorData.user_id}:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Create doctor record in doctors table
+   */
+  private async createDoctorRecord(doctorData: LegacyDoctorData, profileId: string): Promise<string | null> {
+    // Determine primary office if available
+    const primaryOfficeId = doctorData.office_ids && doctorData.office_ids.length > 0
+      ? await this.getOfficeId(doctorData.office_ids[0])
+      : null;
+
+    const insertQuery = `
+      INSERT INTO doctors (
+        profile_id, doctor_number, specialty, years_experience,
+        primary_office_id, status, is_accepting_patients,
+        legacy_user_id, joined_practice_at, updated_at
+      ) VALUES (
+        $1, $2, 'orthodontics', $3, $4, 'active', true, $5, NOW(), NOW()
+      )
+      RETURNING id
+    `;
+
+    // Generate doctor number from legacy user_id
+    const doctorNumber = `DOC-${doctorData.user_id.toString().padStart(6, '0')}`;
+
+    // Estimate years of experience from join date (rough approximation)
+    const yearsExperience = doctorData.date_joined
+      ? Math.max(0, new Date().getFullYear() - new Date(doctorData.date_joined).getFullYear())
+      : null;
+
+    const values = [
+      profileId,
+      doctorNumber,
+      yearsExperience,
+      primaryOfficeId,
+      doctorData.user_id
+    ];
+
+    try {
+      const result = await this.targetPool.query(insertQuery, values);
+      this.stats.doctorProfilesCreated++;
+      return result.rows[0].id;
+    } catch (error) {
+      console.error(`❌ Error creating doctor record for user ${doctorData.user_id}:`, error);
       return null;
     }
   }
