@@ -50,6 +50,7 @@ class TreatmentPlansMigration {
   private errors = 0;
   private skipped = 0;
   private projectLookupMap = new Map<number, string>();
+  private targetClient!: PgClient;
   private orderLookupMap = new Map<number, string>();
   private batchSize = 500;
 
@@ -69,6 +70,8 @@ class TreatmentPlansMigration {
 
     try {
       await sourceDb.connect();
+      this.targetClient = new PgClient({ host: process.env.TARGET_DB_HOST, port: parseInt(process.env.TARGET_DB_PORT || "5432"), user: process.env.TARGET_DB_USER, password: process.env.TARGET_DB_PASSWORD, database: process.env.TARGET_DB_NAME });
+      await this.targetClient.connect();
       await this.buildLookupMaps();
       await this.migrateTreatmentPlans();
       console.log('\n✅ Treatment plans migration completed successfully!');
@@ -85,42 +88,17 @@ class TreatmentPlansMigration {
     console.log('🔍 Building lookup maps...');
 
     // Build project lookup map (only treatment_plan type projects)
-    console.log('  📦 Building project lookup map...');
-    const { data: projects, error: projectError } = await supabase
-      .from('projects')
-      .select('id, legacy_project_id')
-      .eq('project_type', 'treatment_plan')
-      .not('legacy_project_id', 'is', null);
-
-    if (projectError) {
-      throw new Error(`Error fetching projects: ${projectError.message}`);
-    }
-
-    projects?.forEach(project => {
-      if (project.legacy_project_id) {
-        this.projectLookupMap.set(project.legacy_project_id, project.id);
-      }
+    const projectResult = await this.targetClient.query(`SELECT id, legacy_project_id FROM projects WHERE legacy_project_id IS NOT NULL`);
+    projectResult.rows.forEach(row => {
+      this.projectLookupMap.set(row.legacy_project_id, row.id);
     });
-
-    console.log(`    ✅ Built project lookup map: ${this.projectLookupMap.size} treatment plan projects`);
 
     // Build order lookup map
     console.log('  📋 Building order lookup map...');
-    const { data: orders, error: orderError } = await supabase
-      .from('orders')
-      .select('id, legacy_instruction_id')
-      .not('legacy_instruction_id', 'is', null);
-
-    if (orderError) {
-      throw new Error(`Error fetching orders: ${orderError.message}`);
-    }
-
-    orders?.forEach(order => {
-      if (order.legacy_instruction_id) {
-        this.orderLookupMap.set(order.legacy_instruction_id, order.id);
-      }
+    const orderResult = await this.targetClient.query(`SELECT id, legacy_instruction_id FROM orders WHERE legacy_instruction_id IS NOT NULL`);
+    orderResult.rows.forEach(row => {
+      this.orderLookupMap.set(row.legacy_instruction_id, row.id);
     });
-
     console.log(`    ✅ Built order lookup map: ${this.orderLookupMap.size} orders\n`);
   }
 
@@ -273,6 +251,8 @@ class TreatmentPlansMigration {
 
     try {
       await sourceDb.connect();
+      this.targetClient = new PgClient({ host: process.env.TARGET_DB_HOST, port: parseInt(process.env.TARGET_DB_PORT || "5432"), user: process.env.TARGET_DB_USER, password: process.env.TARGET_DB_PASSWORD, database: process.env.TARGET_DB_NAME });
+      await this.targetClient.connect();
 
       // Count source plans
       const sourceResult = await sourceDb.query('SELECT COUNT(*) FROM dispatch_plan');

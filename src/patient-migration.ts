@@ -276,18 +276,100 @@ class PatientMigrationService {
   }
 
   /**
-   * Create patient profile if it doesn't exist
+   * Check if patient record exists in patients table
+   */
+  private async getPatientId(legacyUserId: number): Promise<string | null> {
+    const query = `
+      SELECT id
+      FROM patients
+      WHERE legacy_user_id = $1
+    `;
+
+    try {
+      const result = await this.targetPool.query(query, [legacyUserId]);
+      return result.rows.length > 0 ? result.rows[0].id : null;
+    } catch (error) {
+      console.error('❌ Error checking existing patient record:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Create patient record in patients table
+   */
+  private async createPatientRecord(patientData: PatientRecord, profileId: string): Promise<string | null> {
+    const insertQuery = `
+      INSERT INTO patients (
+        profile_id, patient_number, primary_doctor_id, assigned_office_id, status,
+        legacy_user_id, legacy_patient_id, updated_at
+      ) VALUES (
+        $1, $2, $3, $4, 'active', $5, $6, NOW()
+      )
+      RETURNING id
+    `;
+
+    // Generate patient number from legacy patient_id
+    const patientNumber = `PAT-${patientData.legacy_patient_id.toString().padStart(6, '0')}`;
+
+    // Get primary doctor from metadata if available
+    const legacyDoctorId = patientData.metadata?.migration?.patient_data?.doctor_id;
+    const primaryDoctorId = legacyDoctorId ? await this.getDoctorProfileId(legacyDoctorId) : null;
+
+    // Get office from metadata if available
+    const legacyOfficeId = patientData.metadata?.migration?.patient_data?.office_id;
+    const officeId = legacyOfficeId ? await this.getOfficeId(legacyOfficeId) : null;
+
+    const values = [
+      profileId,
+      patientNumber,
+      primaryDoctorId,
+      officeId,
+      patientData.legacy_user_id,
+      patientData.legacy_patient_id
+    ];
+
+    try {
+      const result = await this.targetPool.query(insertQuery, values);
+      this.stats.patientProfilesCreated++;
+      return result.rows[0].id;
+    } catch (error) {
+      console.error(`❌ Error creating patient record for user ${patientData.legacy_user_id}:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Create patient profile and patient record if they don't exist
    */
   private async ensurePatientProfile(patientData: PatientRecord): Promise<string | null> {
-    // First check if profile already exists
-    let patientId = await this.getPatientProfileId(patientData.legacy_user_id);
-    
+    // First check if patient record already exists in patients table
+    let patientId = await this.getPatientId(patientData.legacy_user_id);
+
     if (patientId) {
       this.stats.patientProfilesSkipped++;
       return patientId;
     }
 
-    // Create new patient profile
+    // Check if profile exists but patient record doesn't
+    let profileId = await this.getPatientProfileId(patientData.legacy_user_id);
+
+    if (!profileId) {
+      // Create new patient profile first
+      profileId = await this.createPatientProfile(patientData);
+      if (!profileId) {
+        return null;
+      }
+    }
+
+    // Create patient record in patients table
+    patientId = await this.createPatientRecord(patientData, profileId);
+    return patientId;
+  }
+
+  /**
+   * Create patient profile in profiles table
+   */
+  private async createPatientProfile(patientData: PatientRecord): Promise<string | null> {
     const insertQuery = `
       INSERT INTO profiles (
         profile_type, first_name, last_name, email, phone, date_of_birth, gender,
@@ -296,7 +378,7 @@ class PatientMigrationService {
         legacy_user_id, legacy_patient_id, created_at, updated_at
       ) VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, NOW(), NOW()
-      ) 
+      )
       RETURNING id
     `;
 
@@ -325,7 +407,6 @@ class PatientMigrationService {
 
     try {
       const result = await this.targetPool.query(insertQuery, values);
-      this.stats.patientProfilesCreated++;
       return result.rows[0].id;
     } catch (error) {
       console.error(`❌ Error creating patient profile for user ${patientData.legacy_user_id}:`, error);
@@ -338,9 +419,11 @@ class PatientMigrationService {
    */
   private async getDoctorProfileId(legacyDoctorId: number): Promise<string | null> {
     const query = `
-      SELECT id 
-      FROM profiles 
-      WHERE legacy_user_id = $1 AND profile_type = 'doctor'
+      SELECT id
+      FROM profiles
+      WHERE legacy_user_id = $1
+        AND (profile_type = 'doctor' OR
+             (profile_type = 'master' AND metadata->'migration'->'doctor_settings' IS NOT NULL))
     `;
 
     try {
@@ -615,7 +698,7 @@ class PatientMigrationService {
         WHERE p.profile_type = 'patient' 
           AND p.legacy_patient_id IS NOT NULL
           AND p.metadata->>'migration' IS NOT NULL
-          AND (p.metadata->'migration'->'patient_data'->>'legacy_doctor_id')::int NOT IN (
+          AND (p.metadata->'migration'->'patient_data'->>'doctor_id')::int NOT IN (
             SELECT DISTINCT legacy_user_id 
             FROM profiles 
             WHERE profile_type = 'doctor' AND legacy_user_id IS NOT NULL

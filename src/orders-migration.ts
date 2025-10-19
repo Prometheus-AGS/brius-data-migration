@@ -196,8 +196,8 @@ class OrdersMigrationService {
     // Get patient UUID lookup map
     const patientMap = new Map<number, string>();
     const patientResult = await this.targetPool.query(`
-      SELECT legacy_user_id, id 
-      FROM patients 
+      SELECT pt.legacy_user_id, pt.id 
+      FROM patients pt 
       WHERE legacy_user_id IS NOT NULL
     `);
     patientResult.rows.forEach(row => {
@@ -205,12 +205,14 @@ class OrdersMigrationService {
     });
     console.log(`✓ Built patient lookup map: ${patientMap.size} entries`);
 
-    // Get doctor UUID lookup map
+    // Get doctor UUID lookup map (including masters who have doctor settings)
     const doctorMap = new Map<number, string>();
     const doctorResult = await this.targetPool.query(`
-      SELECT legacy_user_id, id 
-      FROM profiles 
-      WHERE profile_type = 'doctor' AND legacy_user_id IS NOT NULL
+      SELECT pr.legacy_user_id, d.id
+      FROM doctors d JOIN profiles pr ON d.profile_id = pr.id
+      WHERE (pr.profile_type = 'doctor' OR
+             (pr.profile_type = 'master' AND pr.metadata->'migration'->'doctor_settings' IS NOT NULL))
+        AND pr.legacy_user_id IS NOT NULL
     `);
     doctorResult.rows.forEach(row => {
       doctorMap.set(row.legacy_user_id, row.id);
@@ -521,7 +523,7 @@ class OrdersMigrationService {
         SELECT COUNT(*) as count
         FROM orders o
         WHERE legacy_instruction_id IS NOT NULL
-          AND NOT EXISTS (SELECT 1 FROM patients p WHERE p.id = o.patient_id)
+          AND NOT EXISTS (SELECT 1 FROM profiles p WHERE p.id = o.patient_id AND p.profile_type = 'patient')
       `);
 
       const missingDoctors = await this.targetPool.query(`

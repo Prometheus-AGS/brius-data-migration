@@ -129,14 +129,14 @@ async function migrateCaseFilesOptimized() {
     }
     
     // Prepare case_files records
-    const caseFilesRecords = fileBatch.map(file => ({
-      case_id: file.orders.case_id,
+    const caseFilesRecords = fileBatch.map((file: any) => ({
+      case_id: file.orders?.case_id,
       file_id: file.id,
       file_purpose: determinePurpose(file.file_type, file.metadata),
       display_order: 0,
       created_by: file.uploaded_by,
       created_at: file.uploaded_at
-    }));
+    })).filter(record => record.case_id); // Filter out records without case_id
     
     // Insert batch
     const { error: insertError } = await supabase
@@ -182,8 +182,8 @@ async function migrateCaseFilesOptimized() {
     
   if (sampleCaseFiles) {
     console.log('\n📋 Sample case_files relationships:');
-    sampleCaseFiles.forEach((cf, index) => {
-      console.log(`${index + 1}. Purpose: ${cf.file_purpose}, File: ${cf.files?.filename}`);
+    sampleCaseFiles.forEach((cf: any, index) => {
+      console.log(`${index + 1}. Purpose: ${cf.file_purpose}, File: ${cf.files?.filename || 'unknown'}`);
     });
   }
 }

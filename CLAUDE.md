@@ -27,6 +27,9 @@ npm run migrate:jaws
 npm run migrate:projects
 npm run migrate:treatment-plans
 
+# Combined project migrations
+npm run migrate:projects-and-plans      # Projects + treatment plans together
+
 # Validation commands
 npm run validate:offices
 npm run validate:profiles
@@ -37,9 +40,11 @@ npm run validate:products
 npm run validate:jaws
 npm run validate:projects
 npm run validate:treatment-plans
+npm run validate:projects-and-plans     # Validate projects + treatment plans
 
 # Rollback commands (reverse order)
 npm run rollback:treatment-plans
+npm run rollback:projects-and-plans     # Rollback projects + treatment plans
 npm run rollback:projects
 npm run rollback:jaws
 npm run rollback:products
@@ -90,6 +95,19 @@ npm run migrate:remaining-orders      # Complete remaining orders
 npm run validate:final               # Final migration validation
 npm run migrate:complete-final       # Complete final migration process
 ```
+
+### Full Sync System Commands
+```bash
+# Complete data synchronization (destructive operation)
+./full-sync-improved.sh               # Full sync with confirmation prompts
+./full-sync.sh                        # Basic full sync script
+
+# Manual full sync process
+psql -f truncate-all-tables.sql      # Truncate all target tables (dangerous!)
+npm run migrate:all                   # Full migration after truncation
+```
+
+**Warning:** Full sync operations completely delete all target data before reloading from source.
 
 ## Architecture Overview
 
@@ -276,81 +294,52 @@ The project now includes an advanced differential migration and synchronization 
 
 #### Differential Migration Commands
 ```bash
-# Analyze differential migration needs (dry run)
-npx ts-node src/differential-migration.ts analyze --entities offices,doctors,patients
+# Core differential migration commands (npm scripts)
+npm run differential:migrate          # Execute differential migration
+npm run differential:analyze          # Analyze migration needs (dry run)
+npm run differential:validate         # Validate differential migration results
+
+# Synchronization job management
+npm run sync:create-job              # Create scheduled sync job
+npm run sync:list-jobs               # List all sync jobs
+npm run sync:run-job                 # Execute sync job
+npm run sync:job-status              # Check job status
+npm run sync:cancel-job              # Cancel running job
+
+# Migration analysis and debugging
+npm run checkpoint:status            # Check migration checkpoint status
+npm run checkpoint:reset             # Reset migration checkpoint
+npm run checkpoint:debug             # Debug migration checkpoints
+npm run check:migration-status       # Overall migration status
+
+# Data validation commands
+npm run validate:data-integrity      # Validate data integrity
+npm run validate:completeness        # Check data completeness
+npm run validate:performance         # Performance validation
+
+# Conflict resolution
+npm run conflict:resolve             # Resolve migration conflicts
+npm run conflict:report              # Generate conflict report
+```
+
+#### Advanced CLI Usage (Direct Script Execution)
+For advanced users who need more control over parameters:
+```bash
+# Differential migration with custom parameters
+npx ts-node src/differential-migration.ts migrate --entities offices,doctors,patients
 npx ts-node src/differential-migration.ts analyze --entities all --output analysis-report.json
 
-# Execute differential migration (only new records)
-npx ts-node src/differential-migration.ts migrate --entities offices,doctors,patients --batch-size 500
-npx ts-node src/differential-migration.ts migrate --entities all --dry-run --conflict-resolution source_wins
-
-# Resume interrupted migrations from checkpoints
-npx ts-node src/differential-migration.ts resume --entity orders
-npx ts-node src/differential-migration.ts resume --operation-id diff_migration_20231201_123456
-
-# Check migration status and progress
-npx ts-node src/differential-migration.ts status
-npx ts-node src/differential-migration.ts status --operation-id diff_migration_20231201_123456
-```
-
-#### Sync Scheduler Commands
-```bash
-# Create scheduled synchronization jobs
-npx ts-node src/sync-scheduler.ts create-job \
-  --name "daily-sync" \
-  --schedule "daily" \
-  --entities "offices,doctors,patients,orders" \
-  --conflict-resolution "source_wins" \
-  --max-records 50000
-
-# Manage synchronization jobs
-npx ts-node src/sync-scheduler.ts list-jobs
-npx ts-node src/sync-scheduler.ts list-jobs --status scheduled
-npx ts-node src/sync-scheduler.ts job-status --name "daily-sync"
-
-# Execute sync jobs
+# Sync scheduler with custom configuration
+npx ts-node src/sync-scheduler.ts create-job --name "daily-sync" --schedule "daily"
 npx ts-node src/sync-scheduler.ts run-job --name "daily-sync" --manual
-npx ts-node src/sync-scheduler.ts run-job --job-id job-uuid-123 --force
 
-# Job lifecycle management
-npx ts-node src/sync-scheduler.ts pause-job --name "daily-sync"
-npx ts-node src/sync-scheduler.ts resume-job --name "daily-sync"
-npx ts-node src/sync-scheduler.ts delete-job --name "daily-sync" --force
-```
-
-#### Data Validation Commands
-```bash
-# Comprehensive data validation
-npx ts-node src/data-validator.ts validate \
-  --entities "offices,profiles,doctors,patients,orders" \
-  --type data_integrity \
-  --sampling-rate 1.0
-
-# Specific validation types
+# Data validation with specific parameters
 npx ts-node src/data-validator.ts validate --entities doctors --type relationship_integrity
-npx ts-node src/data-validator.ts validate --entities orders --type completeness_check
-npx ts-node src/data-validator.ts validate --entities all --type performance_check --max-records 100000
-
-# Generate validation reports
 npx ts-node src/data-validator.ts report --comprehensive --output validation-report.json
-npx ts-node src/data-validator.ts report --entities offices,doctors --format markdown
 
-# Record-level validation
-npx ts-node src/data-validator.ts check-record --entity doctors --legacy-id 12345
-npx ts-node src/data-validator.ts check-record --entity patients --uuid-id patient-uuid-123
-```
-
-#### Migration Analysis Commands
-```bash
-# Checkpoint management
-npx ts-node src/migration-analyzer.ts checkpoint-status --all
+# Migration analyzer for debugging
 npx ts-node src/migration-analyzer.ts checkpoint-status --entity orders
-npx ts-node src/migration-analyzer.ts reset-checkpoint --id checkpoint-uuid-123
-
-# System debugging and analysis
 npx ts-node src/migration-analyzer.ts debug --entity doctors --verbose
-npx ts-node src/migration-analyzer.ts analyze-performance --entity orders --last-days 7
-npx ts-node src/migration-analyzer.ts system-health --comprehensive
 ```
 
 ### Advanced System Architecture

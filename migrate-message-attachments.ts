@@ -1,17 +1,20 @@
 import { Client } from 'pg';
 import { createClient } from '@supabase/supabase-js';
 
+import * as dotenv from 'dotenv';
+dotenv.config();
+
 const sourceClient = new Client({
-  host: 'test.brius.com',
-  port: 5432,
-  database: 'mdw_db',
-  user: 'mdw_ai',
-  password: 'xGXmckHY',
+  host: process.env.SOURCE_DB_HOST!,
+  port: parseInt(process.env.SOURCE_DB_PORT!),
+  database: process.env.SOURCE_DB_NAME!,
+  user: process.env.SOURCE_DB_USER!,
+  password: process.env.SOURCE_DB_PASSWORD!,
 });
 
 const supabase = createClient(
-  'http://localhost:8000', 
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaXNzIjoiYnJpdXMiLCJpYXQiOjE2NDE3NjkyMDAsImV4cCI6MTc5OTUzNTYwMH0.7c2CsGc9j4oSSgxshmdreykpW2HyKu36UUE38u1HdRk'
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE!
 );
 
 async function migrateMessageAttachments() {
@@ -130,7 +133,7 @@ async function migrateMessageAttachments() {
             legacy_file_id: file.source_file_id
           });
           
-        } catch (error) {
+        } catch (error: any) {
           console.error(`  ❌ Error processing file ${file.source_file_id}:`, error.message);
           totalErrors++;
         }
@@ -151,7 +154,7 @@ async function migrateMessageAttachments() {
             totalMigrated += attachmentsToInsert.length;
             console.log(`  ✅ Migrated ${attachmentsToInsert.length} attachments`);
           }
-        } catch (insertError) {
+        } catch (insertError: any) {
           console.error(`  ❌ Batch insert exception:`, insertError.message);
           totalErrors += attachmentsToInsert.length;
         }
