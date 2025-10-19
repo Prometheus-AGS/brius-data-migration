@@ -1,1066 +1,941 @@
 # 🔄 SYNCHRONIZATION TECHNICAL ARCHITECTURE
-## Custom Software Design for PostgreSQL-to-Supabase Continuous Sync
+## Advanced Multi-Agent System for Complex PostgreSQL-to-Supabase Continuous Sync
 
-**Document Version:** 1.0
-**Date:** October 18, 2025
-**Scope:** Technical implementation design for ongoing data synchronization
-**Complexity Assessment:** Extremely High - Custom Software Required
+**Document Version:** 2.0
+**Date:** October 19, 2025
+**Scope:** Production-ready technical implementation for ongoing data synchronization
+**Complexity Assessment:** Extremely High - Requires Advanced Multi-Agent Architecture
 
 ---
 
 ## 🎯 EXECUTIVE SUMMARY
 
-Implementing continuous synchronization between our legacy PostgreSQL system and modern Supabase architecture requires **comprehensive custom software** due to the extreme complexity of transformations involved. This document provides a complete technical blueprint for building a production-grade synchronization system.
+Based on analysis of our existing migration scripts, this synchronization system must handle **extreme complexity** including Django ContentTypes, multi-table relationship chains, and UUID transformations across 50+ source tables. This document provides a comprehensive technical blueprint for a **multi-agent synchronization system** that can handle the real-world complexity observed in our successful migration.
 
-### 🚨 **Critical Challenges**
-1. **Schema Transformation:** `dispatch_*` tables → Modern Supabase schema
-2. **ID Transformation:** Integer PKs → UUID relationships with mapping persistence
-3. **Complex Relationships:** 11+ entity types with interdependent foreign keys
-4. **Business Logic:** Embedded transformations (type enums, status mappings)
-5. **Scale Requirements:** Handle 2M+ records with <1% error rate
+### 🔍 **REAL COMPLEXITY ANALYSIS**
 
-### ⚠️ **Why Off-the-Shelf Solutions Won't Work**
-- **No existing CDC tools** handle our specific schema transformations
-- **Standard ETL platforms** lack our UUID mapping requirements
-- **Database replication tools** don't support our business logic transformations
-- **Cloud sync services** can't handle our complex relationship preservation
+From analyzing our migration scripts (`migrate-dispatch-records.ts`, `migrate-case-messages.ts`, etc.), we identified:
+
+#### **Django ContentTypes Complexity**
+- `dispatch_record` table uses `target_type_id` to reference different entity types:
+  - `target_type_id = 11` → Patient messages (requires patients table lookup)
+  - `target_type_id = 58` → User messages (requires profiles table lookup)
+- `dispatch_comment` requires chain: `plan_id → dispatch_plan → dispatch_instruction → cases`
+- `dispatch_notification` with complex JSON template contexts and multi-table user resolution
+
+#### **Multi-Table Relationship Chains**
+- **Case Messages**: `dispatch_comment → dispatch_plan → treatment_plans → orders → cases`
+- **System Messages**: `dispatch_notification → auth_user → profiles + template resolution`
+- **File Relationships**: `dispatch_file → dispatch_file_instruction → dispatch_instruction → orders → cases`
+- **Operations**: `dispatch_transaction → dispatch_order → patients + payment processing`
+
+#### **Legacy ID to UUID Mapping Complexity**
+- Every entity requires persistent legacy_id → UUID mapping
+- Cross-table foreign key reconstruction
+- Relationship integrity validation across 11+ entity types
 
 ---
 
-## 🏗️ COMPLETE SYSTEM ARCHITECTURE
+## 🏗️ MULTI-AGENT SYNCHRONIZATION ARCHITECTURE
 
-### 1. 📡 **CHANGE DATA CAPTURE (CDC) SYSTEM**
+### 🕸️ **AGENT ECOSYSTEM OVERVIEW**
 
-#### Core Architecture
 ```typescript
-interface CDCSystem {
-  sourceMonitor: PostgreSQLChangeStream
-  changeBuffer: ChangeEventQueue
-  filteringRules: EntityFilterConfig
-  changeDetection: TimestampBasedDetection | LogBasedDetection
-}
+interface SyncAgentEcosystem {
+  // Core Infrastructure Agents
+  changeDetectionAgent: PostgreSQLChangeStreamAgent
+  mappingCacheAgent: UUIDMappingCacheAgent
+  relationshipResolverAgent: RelationshipGraphAgent
 
-interface ChangeEvent {
-  table: string
-  operation: 'INSERT' | 'UPDATE' | 'DELETE'
-  oldData?: Record<string, any>
-  newData?: Record<string, any>
-  timestamp: Date
-  transactionId: string
+  // Entity-Specific Sync Agents
+  dispatchRecordSyncAgent: ContentTypeAwareAgent
+  caseMessageSyncAgent: MultiTableChainAgent
+  systemMessageSyncAgent: TemplateProcessingAgent
+  fileRelationshipSyncAgent: JunctionTableAgent
+  operationsSyncAgent: FinancialDataAgent
+
+  // Orchestration & Quality Agents
+  syncOrchestratorAgent: WorkflowCoordinationAgent
+  validationAgent: DataIntegrityVerificationAgent
+  errorRecoveryAgent: FailureResolutionAgent
 }
 ```
 
-#### Implementation Options
+---
 
-**Option A: Timestamp-Based CDC (Recommended)**
+## 🔧 DETAILED AGENT SPECIFICATIONS
+
+### 1. 📡 **CHANGE DETECTION AGENT**
+
+#### **PostgreSQL Read-Only Replica Strategy**
 ```sql
--- Query pattern for detecting changes
-SELECT * FROM dispatch_patient
-WHERE updated_at > $last_sync_timestamp
-ORDER BY updated_at ASC;
+-- Trigger-based change tracking on source cluster
+CREATE TABLE sync_change_log (
+  id BIGSERIAL PRIMARY KEY,
+  table_name VARCHAR(64) NOT NULL,
+  record_id INTEGER NOT NULL,
+  operation CHAR(1) NOT NULL, -- I/U/D
+  changed_columns TEXT[], -- For UPDATE operations
+  change_data JSONB, -- Full record data
+  transaction_id BIGINT,
+  change_timestamp TIMESTAMP DEFAULT NOW(),
+  processed BOOLEAN DEFAULT FALSE,
+  INDEX (table_name, change_timestamp),
+  INDEX (processed, change_timestamp)
+);
+
+-- Example trigger for dispatch_record table
+CREATE OR REPLACE FUNCTION log_dispatch_record_changes()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    INSERT INTO sync_change_log (table_name, record_id, operation, change_data)
+    VALUES ('dispatch_record', NEW.id, 'I', row_to_json(NEW));
+    RETURN NEW;
+  ELSIF TG_OP = 'UPDATE' THEN
+    INSERT INTO sync_change_log (table_name, record_id, operation, change_data)
+    VALUES ('dispatch_record', NEW.id, 'U', row_to_json(NEW));
+    RETURN NEW;
+  ELSIF TG_OP = 'DELETE' THEN
+    INSERT INTO sync_change_log (table_name, record_id, operation, change_data)
+    VALUES ('dispatch_record', OLD.id, 'D', row_to_json(OLD));
+    RETURN OLD;
+  END IF;
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER dispatch_record_change_trigger
+  AFTER INSERT OR UPDATE OR DELETE ON dispatch_record
+  FOR EACH ROW EXECUTE FUNCTION log_dispatch_record_changes();
 ```
-✅ **Pros:** Simple, works with existing schema, no DB modifications
-❌ **Cons:** Misses hard deletes, requires updated_at columns
 
-**Option B: PostgreSQL Logical Replication**
-```postgresql
--- Create replication slot
-SELECT pg_create_logical_replication_slot('sync_slot', 'pgoutput');
-
--- Stream changes
-SELECT * FROM pg_logical_slot_get_changes('sync_slot', NULL, NULL);
-```
-✅ **Pros:** Captures all changes including deletes, transactional consistency
-❌ **Cons:** Requires source DB modifications, more complex setup
-
-#### Required Software Components
+#### **Agent Implementation**
 ```typescript
-class CDCManager {
-  private connectionPool: Pool
-  private changeBuffer: Queue<ChangeEvent>
-  private filterRules: FilterConfig
+class PostgreSQLChangeStreamAgent {
+  private readOnlyReplicaPool: Pool
+  private changeLogPoller: NodeJS.Timer
+  private lastProcessedId: bigint = 0n
 
-  async detectChanges(since: Date): Promise<ChangeEvent[]>
-  async bufferChanges(events: ChangeEvent[]): Promise<void>
-  async getNextBatch(batchSize: number): Promise<ChangeEvent[]>
-}
-```
+  async startChangeStreaming(): Promise<void> {
+    // Poll read-only replica for changes every 30 seconds
+    this.changeLogPoller = setInterval(async () => {
+      await this.processChangeLogBatch()
+    }, 30000)
+  }
 
----
+  private async processChangeLogBatch(): Promise<void> {
+    const changes = await this.readOnlyReplicaPool.query(`
+      SELECT id, table_name, record_id, operation, change_data, change_timestamp
+      FROM sync_change_log
+      WHERE id > $1 AND processed = FALSE
+      ORDER BY id ASC
+      LIMIT 1000
+    `, [this.lastProcessedId])
 
-### 2. 🗝️ **UUID MAPPING SERVICE**
-
-#### Architecture Requirements
-The most critical component - must maintain perfect mapping between legacy IDs and UUIDs.
-
-```typescript
-interface UUIDMappingService {
-  mappingCache: RedisCache<number, string>
-  persistentStorage: PostgreSQLMappings
-  relationshipGraph: EntityRelationshipMap
-
-  async getUUID(legacyId: number, entityType: string): Promise<string>
-  async createMapping(legacyId: number, entityType: string): Promise<string>
-  async validateRelationships(entity: any): Promise<ValidationResult>
-}
-
-interface MappingRecord {
-  legacy_id: number
-  uuid: string
-  entity_type: string
-  created_at: Date
-  validated_at: Date
-  source_table: string
-  target_table: string
-}
-```
-
-#### Implementation Strategy
-```typescript
-class UUIDMapper {
-  private redis: Redis
-  private postgres: Pool
-
-  async resolveUUID(legacyId: number, entityType: string): Promise<string> {
-    // 1. Check Redis cache first (microsecond lookup)
-    let uuid = await this.redis.get(`${entityType}:${legacyId}`)
-
-    if (!uuid) {
-      // 2. Query persistent mappings
-      uuid = await this.queryMapping(legacyId, entityType)
-
-      if (!uuid) {
-        // 3. Create new UUID if not found
-        uuid = await this.createNewMapping(legacyId, entityType)
-      }
-
-      // 4. Cache for future lookups
-      await this.redis.setex(`${entityType}:${legacyId}`, 3600, uuid)
+    for (const change of changes.rows) {
+      await this.routeChangeToAgent(change)
+      this.lastProcessedId = BigInt(change.id)
     }
 
-    return uuid
+    // Mark processed
+    if (changes.rows.length > 0) {
+      await this.markChangesProcessed(this.lastProcessedId)
+    }
+  }
+
+  private async routeChangeToAgent(change: ChangeLogEntry): Promise<void> {
+    const routingMap = {
+      'dispatch_record': 'dispatchRecordSyncAgent',
+      'dispatch_comment': 'caseMessageSyncAgent',
+      'dispatch_notification': 'systemMessageSyncAgent',
+      'dispatch_file': 'fileRelationshipSyncAgent',
+      'dispatch_transaction': 'operationsSyncAgent'
+    }
+
+    const targetAgent = routingMap[change.table_name]
+    if (targetAgent) {
+      await this.sendToAgent(targetAgent, change)
+    }
   }
 }
 ```
 
-#### Performance Requirements
-- **Lookup Speed:** <1ms per UUID resolution
-- **Cache Hit Rate:** >95% for frequently accessed mappings
-- **Persistent Storage:** All mappings backed by PostgreSQL
-- **Relationship Validation:** Cross-reference integrity checking
+### 2. 🗺️ **UUID MAPPING CACHE AGENT**
 
----
-
-### 3. 🔄 **DATA TRANSFORMATION ENGINE**
-
-#### Schema Mapping Definitions
+#### **High-Performance Mapping Cache**
 ```typescript
-interface TransformationSchema {
-  sourceTable: string
-  targetTable: string
-  fieldMappings: FieldMapping[]
-  businessRules: BusinessRule[]
-  validationRules: ValidationRule[]
-  dependencies: string[]
-}
+class UUIDMappingCacheAgent {
+  private redisClient: Redis
+  private postgresPool: Pool
+  private mappingCache: Map<string, Map<number, string>> = new Map()
 
-interface FieldMapping {
-  sourceField: string
-  targetField: string
-  transformation: TransformationType
-  defaultValue?: any
-  validationRules?: ValidationRule[]
-}
+  // Warm cache on startup
+  async initializeMappingCache(): Promise<void> {
+    const entities = ['patients', 'profiles', 'cases', 'orders', 'treatment_plans']
 
-enum TransformationType {
-  DIRECT_COPY = 'direct_copy',
-  UUID_LOOKUP = 'uuid_lookup',
-  ENUM_MAPPING = 'enum_mapping',
-  JSON_EXTRACTION = 'json_extraction',
-  CALCULATED_FIELD = 'calculated_field',
-  BUSINESS_LOGIC = 'business_logic'
-}
-```
+    for (const entity of entities) {
+      const mappings = await this.postgresPool.query(`
+        SELECT legacy_${entity.slice(0, -1)}_id, id
+        FROM ${entity}
+        WHERE legacy_${entity.slice(0, -1)}_id IS NOT NULL
+      `)
 
-#### Example Transformation Configuration
-```typescript
-const PATIENT_TRANSFORMATION: TransformationSchema = {
-  sourceTable: 'dispatch_patient',
-  targetTable: 'patients',
-  fieldMappings: [
-    {
-      sourceField: 'id',
-      targetField: 'legacy_patient_id',
-      transformation: TransformationType.DIRECT_COPY
-    },
-    {
-      sourceField: 'id',
-      targetField: 'id',
-      transformation: TransformationType.UUID_LOOKUP,
-      validationRules: [{ type: 'required' }, { type: 'uuid_format' }]
-    },
-    {
-      sourceField: 'office_id',
-      targetField: 'office_id',
-      transformation: TransformationType.UUID_LOOKUP,
-      validationRules: [{ type: 'foreign_key_exists', table: 'offices' }]
-    },
-    {
-      sourceField: 'user_id',
-      targetField: 'profile_id',
-      transformation: TransformationType.UUID_LOOKUP,
-      validationRules: [{ type: 'foreign_key_exists', table: 'profiles' }]
+      const entityMap = new Map<number, string>()
+      mappings.rows.forEach(row => {
+        entityMap.set(row[`legacy_${entity.slice(0, -1)}_id`], row.id)
+      })
+
+      this.mappingCache.set(entity, entityMap)
+
+      // Also cache in Redis for cross-service access
+      const redisKey = `mapping:${entity}`
+      await this.redisClient.hmset(redisKey,
+        mappings.rows.reduce((acc, row) => {
+          acc[row[`legacy_${entity.slice(0, -1)}_id`]] = row.id
+          return acc
+        }, {})
+      )
     }
-  ],
-  businessRules: [
-    { type: 'patient_number_format', field: 'patient_number' },
-    { type: 'clinical_data_privacy', field: 'medical_notes' }
-  ],
-  dependencies: ['offices', 'profiles']
+
+    console.log(`Cached mappings for ${entities.length} entities`)
+  }
+
+  async getUUIDForLegacyId(entityType: string, legacyId: number): Promise<string | null> {
+    // Try cache first
+    const entityCache = this.mappingCache.get(entityType)
+    if (entityCache?.has(legacyId)) {
+      return entityCache.get(legacyId)!
+    }
+
+    // Try Redis
+    const redisResult = await this.redisClient.hget(`mapping:${entityType}`, String(legacyId))
+    if (redisResult) {
+      // Update local cache
+      if (!entityCache) {
+        this.mappingCache.set(entityType, new Map())
+      }
+      this.mappingCache.get(entityType)!.set(legacyId, redisResult)
+      return redisResult
+    }
+
+    // Database fallback (and cache result)
+    const dbResult = await this.queryDatabaseMapping(entityType, legacyId)
+    if (dbResult) {
+      await this.cacheMapping(entityType, legacyId, dbResult)
+    }
+
+    return dbResult
+  }
+
+  async createNewMapping(entityType: string, legacyId: number, uuid: string): Promise<void> {
+    // Update all caches
+    if (!this.mappingCache.has(entityType)) {
+      this.mappingCache.set(entityType, new Map())
+    }
+    this.mappingCache.get(entityType)!.set(legacyId, uuid)
+
+    await this.redisClient.hset(`mapping:${entityType}`, String(legacyId), uuid)
+
+    // Persist to database via migration_mappings table
+    await this.postgresPool.query(`
+      INSERT INTO migration_mappings (entity_type, legacy_id, entity_uuid, created_at)
+      VALUES ($1, $2, $3, NOW())
+      ON CONFLICT (entity_type, legacy_id) DO UPDATE SET entity_uuid = $3
+    `, [entityType, legacyId, uuid])
+  }
 }
 ```
 
-#### Transformation Engine Implementation
+### 3. 🔗 **RELATIONSHIP RESOLVER AGENT**
+
+#### **Multi-Table Relationship Chain Resolution**
 ```typescript
-class TransformationEngine {
-  private schemas: Map<string, TransformationSchema>
-  private uuidMapper: UUIDMapper
-  private validator: DataValidator
+class RelationshipGraphAgent {
+  private relationshipConfig: RelationshipConfig
+  private mappingAgent: UUIDMappingCacheAgent
 
-  async transformRecord(
-    sourceRecord: any,
-    schema: TransformationSchema
-  ): Promise<TransformedRecord> {
-    const targetRecord: any = {}
+  constructor() {
+    // Define complex relationship chains from migration analysis
+    this.relationshipConfig = {
+      'dispatch_comment': {
+        chain: ['dispatch_plan', 'dispatch_instruction', 'cases'],
+        resolutionPath: async (planId: number) => {
+          // plan_id → dispatch_plan.instruction_id → dispatch_instruction.id → cases
+          const plan = await this.sourcePool.query(
+            'SELECT instruction_id FROM dispatch_plan WHERE id = $1', [planId]
+          )
 
-    for (const mapping of schema.fieldMappings) {
-      try {
-        switch (mapping.transformation) {
-          case TransformationType.DIRECT_COPY:
-            targetRecord[mapping.targetField] = sourceRecord[mapping.sourceField]
-            break
+          if (!plan.rows[0]?.instruction_id) return null
 
-          case TransformationType.UUID_LOOKUP:
-            const legacyId = sourceRecord[mapping.sourceField]
-            targetRecord[mapping.targetField] = await this.uuidMapper.resolveUUID(
-              legacyId,
-              this.getEntityTypeForField(mapping.targetField)
-            )
-            break
+          const instruction = await this.sourcePool.query(
+            'SELECT id FROM dispatch_instruction WHERE id = $1',
+            [plan.rows[0].instruction_id]
+          )
 
-          case TransformationType.ENUM_MAPPING:
-            targetRecord[mapping.targetField] = this.mapEnum(
-              sourceRecord[mapping.sourceField],
-              mapping.enumMap
-            )
-            break
+          if (!instruction.rows[0]) return null
 
-          case TransformationType.BUSINESS_LOGIC:
-            targetRecord[mapping.targetField] = await this.applyBusinessLogic(
-              sourceRecord,
-              mapping.businessLogicFunction
-            )
-            break
+          // Map instruction to case via orders → cases
+          return await this.mappingAgent.getUUIDForLegacyId('cases', instruction.rows[0].id)
+        }
+      },
+
+      'dispatch_record': {
+        chain: ['dynamic_content_type_resolution'],
+        resolutionPath: async (record: any) => {
+          // Handle Django ContentTypes complexity
+          if (record.target_type_id === 11) {
+            // Patient message
+            return {
+              recipientType: 'patient',
+              recipientId: await this.mappingAgent.getUUIDForLegacyId('patients', record.target_id)
+            }
+          } else if (record.target_type_id === 58) {
+            // User message - requires auth_user → profiles resolution
+            return {
+              recipientType: 'user',
+              recipientId: await this.mappingAgent.getUUIDForLegacyId('profiles', record.target_id)
+            }
+          }
+          return null
+        }
+      },
+
+      'dispatch_file': {
+        chain: ['dispatch_file_instruction', 'dispatch_instruction', 'orders', 'cases'],
+        resolutionPath: async (fileId: number) => {
+          // Multi-junction table resolution
+          const fileInstruction = await this.sourcePool.query(`
+            SELECT dfi.instruction_id
+            FROM dispatch_file_instruction dfi
+            WHERE dfi.file_id = $1
+          `, [fileId])
+
+          if (!fileInstruction.rows[0]) return null
+
+          const instructionId = fileInstruction.rows[0].instruction_id
+          const orderUuid = await this.mappingAgent.getUUIDForLegacyId('orders', instructionId)
+
+          if (!orderUuid) return null
+
+          // Get case from order
+          const orderCase = await this.targetPool.query(
+            'SELECT patient_id FROM orders WHERE id = $1', [orderUuid]
+          )
+
+          return orderCase.rows[0]?.patient_id
+        }
+      }
+    }
+  }
+
+  async resolveRelationships(entityType: string, sourceRecord: any): Promise<ResolvedRelationships> {
+    const config = this.relationshipConfig[entityType]
+    if (!config) {
+      throw new Error(`No relationship configuration for ${entityType}`)
+    }
+
+    return await config.resolutionPath(sourceRecord)
+  }
+}
+```
+
+### 4. 📝 **DISPATCH RECORD SYNC AGENT**
+
+#### **ContentType-Aware Synchronization**
+```typescript
+class DispatchRecordSyncAgent {
+  private relationshipResolver: RelationshipGraphAgent
+  private mappingAgent: UUIDMappingCacheAgent
+
+  async processDispatchRecordChange(change: ChangeLogEntry): Promise<SyncResult> {
+    const record = change.change_data as DispatchRecord
+
+    try {
+      // Resolve complex relationships using Django ContentTypes
+      const relationships = await this.relationshipResolver.resolveRelationships(
+        'dispatch_record', record
+      )
+
+      if (!relationships?.recipientId) {
+        return { status: 'skipped', reason: 'No recipient mapping found' }
+      }
+
+      // Resolve author using auth_user → profiles mapping
+      let senderId = null
+      if (record.author_id) {
+        senderId = await this.mappingAgent.getUUIDForLegacyId('profiles', record.author_id)
+      }
+
+      // Map message type from legacy enum
+      const messageType = this.mapMessageType(record.type)
+
+      // Handle different operations
+      switch (change.operation) {
+        case 'I':
+          return await this.insertMessage(record, relationships, senderId, messageType)
+        case 'U':
+          return await this.updateMessage(record, relationships, senderId, messageType)
+        case 'D':
+          return await this.deleteMessage(record)
+      }
+
+    } catch (error) {
+      return {
+        status: 'error',
+        error: error.message,
+        retryable: this.isRetryableError(error)
+      }
+    }
+  }
+
+  private async insertMessage(
+    record: DispatchRecord,
+    relationships: ResolvedRelationships,
+    senderId: string | null,
+    messageType: string
+  ): Promise<SyncResult> {
+
+    const messageData = {
+      message_type: messageType,
+      title: null,
+      content: record.text,
+      sender_id: senderId,
+      recipient_type: relationships.recipientType,
+      recipient_id: relationships.recipientId,
+      metadata: {
+        legacy_type: record.type,
+        legacy_target_type_id: record.target_type_id,
+        legacy_group_id: record.group_id,
+        legacy_public: record.public
+      },
+      is_read: false,
+      created_at: record.created_at.toISOString(),
+      updated_at: record.created_at.toISOString(),
+      legacy_record_id: record.id
+    }
+
+    const { data, error } = await this.supabase
+      .from('messages')
+      .insert(messageData)
+      .select('id')
+
+    if (error) {
+      throw new Error(`Supabase insert failed: ${error.message}`)
+    }
+
+    // Create mapping for future updates
+    await this.mappingAgent.createNewMapping('messages', record.id, data[0].id)
+
+    return { status: 'success', targetId: data[0].id }
+  }
+
+  private mapMessageType(legacyType: number): string {
+    const typeMap = {
+      3: 'support',
+      5: 'clinical_note',
+      6: 'notification',
+      8: 'status_update'
+    }
+    return typeMap[legacyType] || 'general'
+  }
+}
+```
+
+### 5. 💬 **CASE MESSAGE SYNC AGENT**
+
+#### **Multi-Table Chain Processing**
+```typescript
+class CaseMessageSyncAgent {
+  private relationshipResolver: RelationshipGraphAgent
+
+  async processCaseMessageChange(change: ChangeLogEntry): Promise<SyncResult> {
+    const comment = change.change_data as DispatchComment
+
+    try {
+      // Resolve complex chain: plan_id → treatment_plans → orders → cases
+      const caseId = await this.relationshipResolver.resolveRelationships(
+        'dispatch_comment', comment.plan_id
+      )
+
+      if (!caseId) {
+        return {
+          status: 'skipped',
+          reason: `No case mapping for plan_id ${comment.plan_id}`
+        }
+      }
+
+      // Resolve author through profiles mapping
+      let senderProfileId = null
+      if (comment.author_id) {
+        senderProfileId = await this.mappingAgent.getUUIDForLegacyId(
+          'profiles', comment.author_id
+        )
+      }
+
+      // Classify message type using content analysis
+      const messageType = this.classifyMessageType(comment.text)
+
+      // Generate subject from content
+      const subject = this.generateSubject(comment.text)
+
+      const caseMessageData = {
+        case_id: caseId,
+        sender_id: senderProfileId,
+        recipient_id: null, // Case messages are broadcast to case participants
+        message_type: messageType,
+        subject: subject,
+        content: comment.text,
+        priority: 'normal',
+        is_urgent: false,
+        requires_response: messageType === 'patient_question',
+        is_confidential: true,
+        sent_at: comment.created_at.toISOString(),
+        metadata: {
+          legacy_plan_id: comment.plan_id,
+          legacy_author_id: comment.author_id,
+          classification_confidence: this.getClassificationConfidence(comment.text)
+        },
+        legacy_record_id: comment.id,
+        legacy_message_id: comment.id
+      }
+
+      const { data, error } = await this.supabase
+        .from('case_messages')
+        .insert(caseMessageData)
+        .select('id')
+
+      if (error) {
+        throw new Error(`Case message insert failed: ${error.message}`)
+      }
+
+      return { status: 'success', targetId: data[0].id }
+
+    } catch (error) {
+      return {
+        status: 'error',
+        error: error.message,
+        retryable: this.isRetryableError(error)
+      }
+    }
+  }
+
+  private classifyMessageType(text: string): string {
+    const lowercaseText = text?.toLowerCase() || ''
+
+    if (lowercaseText.includes('approve') || lowercaseText.includes('looks good')) {
+      return 'doctor_response'
+    } else if (lowercaseText.includes('question') || lowercaseText.includes('?')) {
+      return 'patient_question'
+    } else if (lowercaseText.includes('treatment') || lowercaseText.includes('plan')) {
+      return 'treatment_update'
+    } else if (lowercaseText.includes('note') || lowercaseText.includes('correction')) {
+      return 'clinical_note'
+    }
+
+    return 'clinical_note' // Default
+  }
+}
+```
+
+### 6. 📧 **SYSTEM MESSAGE SYNC AGENT**
+
+#### **Template Processing & JSON Parsing**
+```typescript
+class SystemMessageSyncAgent {
+  private templateProcessor: TemplateProcessor
+
+  async processSystemMessageChange(change: ChangeLogEntry): Promise<SyncResult> {
+    const notification = change.change_data as DispatchNotification
+
+    try {
+      // Skip inactive notifications
+      if (!notification.sent || !notification.send) {
+        return { status: 'skipped', reason: 'Inactive notification' }
+      }
+
+      // Parse and validate template context JSON
+      let templateContext = {}
+      if (notification.template_context) {
+        try {
+          templateContext = JSON.parse(notification.template_context)
+        } catch (jsonError) {
+          return {
+            status: 'error',
+            error: `JSON parse failed: ${jsonError.message}`,
+            retryable: false
+          }
+        }
+      }
+
+      // Resolve recipient through multiple possible paths
+      let recipientId = null
+      if (notification.recipient_id) {
+        // Try different entity types based on notification type
+        if (notification.template_name?.includes('patient')) {
+          recipientId = await this.mappingAgent.getUUIDForLegacyId(
+            'patients', notification.recipient_id
+          )
+        } else {
+          recipientId = await this.mappingAgent.getUUIDForLegacyId(
+            'profiles', notification.recipient_id
+          )
+        }
+      }
+
+      // Process template with context
+      const processedContent = await this.templateProcessor.process(
+        notification.template_name,
+        templateContext,
+        notification.content
+      )
+
+      const systemMessageData = {
+        message_type: this.mapNotificationType(notification.template_name),
+        sender: notification.sender || 'system',
+        recipient_id: recipientId,
+        template_name: notification.template_name,
+        template_context: templateContext,
+        subject: notification.subject,
+        content: processedContent,
+        priority: this.determinePriority(notification.template_name),
+        is_urgent: notification.template_name?.includes('urgent') || false,
+        scheduled_at: notification.send_at?.toISOString(),
+        sent_at: notification.sent_at?.toISOString(),
+        delivery_status: 'delivered',
+        metadata: {
+          legacy_sender: notification.sender,
+          legacy_template_name: notification.template_name,
+          original_content_length: notification.content?.length || 0,
+          processing_timestamp: new Date().toISOString()
+        },
+        legacy_notification_id: notification.id
+      }
+
+      const { data, error } = await this.supabase
+        .from('system_messages')
+        .insert(systemMessageData)
+        .select('id')
+
+      if (error) {
+        throw new Error(`System message insert failed: ${error.message}`)
+      }
+
+      return { status: 'success', targetId: data[0].id }
+
+    } catch (error) {
+      return {
+        status: 'error',
+        error: error.message,
+        retryable: this.isRetryableError(error)
+      }
+    }
+  }
+
+  private mapNotificationType(templateName: string): string {
+    const typeMap = {
+      'payment_reminder': 'billing',
+      'appointment_confirmation': 'appointment',
+      'treatment_update': 'clinical',
+      'system_maintenance': 'system',
+      'welcome_message': 'onboarding'
+    }
+
+    for (const [pattern, type] of Object.entries(typeMap)) {
+      if (templateName?.includes(pattern)) {
+        return type
+      }
+    }
+
+    return 'general'
+  }
+}
+```
+
+### 7. 🎭 **SYNC ORCHESTRATOR AGENT**
+
+#### **Workflow Coordination & Dependency Management**
+```typescript
+class SyncOrchestratorAgent {
+  private agents: Map<string, SyncAgent> = new Map()
+  private dependencyGraph: DependencyGraph
+  private processingQueue: PriorityQueue<SyncTask>
+
+  constructor() {
+    // Define processing dependencies
+    this.dependencyGraph = {
+      'auth_user': [], // No dependencies
+      'dispatch_patient': ['auth_user'], // Needs profiles
+      'dispatch_plan': ['dispatch_patient', 'dispatch_instruction'],
+      'dispatch_comment': ['dispatch_plan'], // Needs treatment plans
+      'dispatch_record': ['dispatch_patient', 'auth_user'], // Needs both
+      'dispatch_notification': ['auth_user'], // Needs profiles
+      'dispatch_file': ['dispatch_instruction'] // Needs orders
+    }
+  }
+
+  async processChangeLogBatch(changes: ChangeLogEntry[]): Promise<BatchSyncResult> {
+    // Sort changes by dependency order
+    const sortedChanges = this.topologicalSort(changes)
+
+    const results: SyncResult[] = []
+    const errors: SyncError[] = []
+
+    // Process in dependency order with parallelization where possible
+    const dependencyLevels = this.groupByDependencyLevel(sortedChanges)
+
+    for (const level of dependencyLevels) {
+      // Process all changes at this dependency level in parallel
+      const levelPromises = level.map(async (change) => {
+        const agent = this.getAgentForTable(change.table_name)
+        if (!agent) {
+          return { status: 'error', error: `No agent for ${change.table_name}` }
         }
 
-        // Validate field after transformation
-        await this.validator.validateField(
-          targetRecord[mapping.targetField],
-          mapping.validationRules
-        )
+        return await agent.processChange(change)
+      })
 
-      } catch (error) {
-        throw new TransformationError(
-          `Failed to transform ${mapping.sourceField} -> ${mapping.targetField}`,
-          error
-        )
+      const levelResults = await Promise.allSettled(levelPromises)
+
+      levelResults.forEach((result, index) => {
+        if (result.status === 'fulfilled') {
+          results.push(result.value)
+        } else {
+          errors.push({
+            change: level[index],
+            error: result.reason,
+            retryable: true
+          })
+        }
+      })
+
+      // If any non-retryable errors at this level, stop processing
+      const criticalErrors = errors.filter(e => !e.retryable)
+      if (criticalErrors.length > 0) {
+        break
       }
     }
 
     return {
-      data: targetRecord,
-      metadata: {
-        sourceTable: schema.sourceTable,
-        transformedAt: new Date(),
-        validationStatus: 'passed'
-      }
+      totalProcessed: changes.length,
+      successful: results.filter(r => r.status === 'success').length,
+      skipped: results.filter(r => r.status === 'skipped').length,
+      errors: errors.length,
+      retryableErrors: errors.filter(e => e.retryable),
+      processingTimeMs: Date.now() - startTime
     }
   }
-}
-```
 
----
-
-### 4. 🔀 **CONFLICT RESOLUTION SYSTEM**
-
-#### Conflict Detection
-```typescript
-interface ConflictDetector {
-  async detectConflicts(
-    sourceChange: ChangeEvent,
-    targetRecord: any
-  ): Promise<ConflictType[]>
-}
-
-enum ConflictType {
-  CONCURRENT_MODIFICATION = 'concurrent_modification',
-  FOREIGN_KEY_VIOLATION = 'foreign_key_violation',
-  BUSINESS_RULE_VIOLATION = 'business_rule_violation',
-  SCHEMA_MISMATCH = 'schema_mismatch',
-  UUID_MAPPING_CONFLICT = 'uuid_mapping_conflict'
-}
-```
-
-#### Resolution Strategies
-```typescript
-class ConflictResolver {
-  private strategies: Map<ConflictType, ResolutionStrategy>
-
-  async resolveConflict(
-    conflict: Conflict,
-    strategy: ResolutionStrategy = ResolutionStrategy.SOURCE_WINS
-  ): Promise<ResolutionResult> {
-
-    switch (strategy) {
-      case ResolutionStrategy.SOURCE_WINS:
-        return await this.applySourceData(conflict)
-
-      case ResolutionStrategy.TARGET_WINS:
-        return await this.preserveTargetData(conflict)
-
-      case ResolutionStrategy.MERGE:
-        return await this.mergeData(conflict)
-
-      case ResolutionStrategy.MANUAL_REVIEW:
-        return await this.escalateToHuman(conflict)
+  private getAgentForTable(tableName: string): SyncAgent | null {
+    const agentMap = {
+      'dispatch_record': 'dispatchRecordSyncAgent',
+      'dispatch_comment': 'caseMessageSyncAgent',
+      'dispatch_notification': 'systemMessageSyncAgent',
+      'dispatch_file': 'fileRelationshipSyncAgent',
+      'dispatch_transaction': 'operationsSyncAgent'
     }
+
+    return this.agents.get(agentMap[tableName])
   }
 }
 ```
 
 ---
 
-### 5. 🎛️ **ORCHESTRATION ENGINE**
+## 🚀 DEPLOYMENT ARCHITECTURE
 
-#### Sync Job Management
-```typescript
-interface SyncOrchestrator {
-  scheduler: JobScheduler
-  dependencyManager: DependencyGraph
-  progressTracker: ProgressMonitor
-  errorHandler: ErrorRecoverySystem
-}
+### **Infrastructure Requirements**
 
-class SyncJobExecutor {
-  async executeSyncJob(config: SyncJobConfig): Promise<SyncResult> {
-    const job = await this.createJob(config)
-
-    try {
-      // 1. Pre-sync validation
-      await this.validatePreConditions(job)
-
-      // 2. Detect changes since last sync
-      const changes = await this.cdcSystem.detectChanges(job.lastSyncTime)
-
-      // 3. Group changes by dependency order
-      const orderedChanges = this.dependencyManager.orderChanges(changes)
-
-      // 4. Process each entity group
-      for (const entityGroup of orderedChanges) {
-        await this.processEntityGroup(entityGroup, job)
-      }
-
-      // 5. Post-sync validation
-      await this.validatePostSync(job)
-
-      // 6. Update sync checkpoint
-      await this.updateCheckpoint(job)
-
-      return { status: 'SUCCESS', recordsProcessed: changes.length }
-
-    } catch (error) {
-      await this.handleSyncFailure(job, error)
-      return { status: 'FAILED', error: error.message }
-    }
-  }
-}
-```
-
----
-
-### 6. 📊 **MONITORING AND OBSERVABILITY**
-
-#### Metrics Collection
-```typescript
-interface SyncMetrics {
-  recordsProcessed: number
-  successRate: number
-  averageLatency: number
-  errorRate: number
-  throughputPerSecond: number
-  uuidCacheHitRate: number
-  conflictResolutionRate: number
-}
-
-class MetricsCollector {
-  async trackSyncExecution(job: SyncJob): Promise<void> {
-    const metrics = await this.calculateMetrics(job)
-
-    await this.persistMetrics(metrics)
-    await this.sendToMonitoringSystem(metrics)
-    await this.checkAlertThresholds(metrics)
-  }
-}
-```
-
----
-
-## 🛠️ **DETAILED SOFTWARE DESIGN**
-
-### Core Software Stack Requirements
-
-#### 1. **Application Layer** (Node.js/TypeScript)
-```typescript
-// Main synchronization application
-class SynchronizationPlatform {
-  private cdcSystem: CDCManager
-  private uuidMapper: UUIDMappingService
-  private transformer: TransformationEngine
-  private conflictResolver: ConflictResolver
-  private orchestrator: SyncOrchestrator
-  private validator: ValidationFramework
-  private monitor: MonitoringSystem
-
-  async start(): Promise<void> {
-    await this.initializeServices()
-    await this.loadConfiguration()
-    await this.startScheduler()
-  }
-}
-```
-
-#### 2. **Data Storage Layer**
-```sql
--- Sync control tables
-CREATE TABLE sync_jobs (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  name VARCHAR(255) NOT NULL,
-  schedule_type sync_schedule_type NOT NULL,
-  last_execution_at TIMESTAMPTZ,
-  next_execution_at TIMESTAMPTZ,
-  status sync_job_status DEFAULT 'pending',
-  configuration JSONB NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE TABLE sync_executions (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  job_id UUID REFERENCES sync_jobs(id),
-  started_at TIMESTAMPTZ NOT NULL,
-  completed_at TIMESTAMPTZ,
-  records_processed INTEGER DEFAULT 0,
-  records_succeeded INTEGER DEFAULT 0,
-  records_failed INTEGER DEFAULT 0,
-  errors JSONB,
-  metrics JSONB,
-  status sync_execution_status DEFAULT 'running'
-);
-
-CREATE TABLE sync_conflicts (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  execution_id UUID REFERENCES sync_executions(id),
-  source_table VARCHAR(255) NOT NULL,
-  source_record_id INTEGER NOT NULL,
-  target_table VARCHAR(255) NOT NULL,
-  target_record_id UUID,
-  conflict_type conflict_type_enum NOT NULL,
-  conflict_data JSONB NOT NULL,
-  resolution_strategy conflict_resolution_strategy,
-  resolved_at TIMESTAMPTZ,
-  resolved_by VARCHAR(255),
-  resolution_data JSONB
-);
-
--- Enhanced UUID mappings with sync tracking
-CREATE TABLE uuid_mappings_enhanced (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  legacy_id INTEGER NOT NULL,
-  entity_uuid UUID NOT NULL,
-  entity_type VARCHAR(100) NOT NULL,
-  source_table VARCHAR(255) NOT NULL,
-  target_table VARCHAR(255) NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  last_validated_at TIMESTAMPTZ,
-  sync_status mapping_sync_status DEFAULT 'active',
-  UNIQUE(legacy_id, entity_type)
-);
-```
-
-#### 3. **Caching Layer** (Redis)
-```typescript
-interface MappingCache {
-  // UUID mappings cache
-  async getMapping(key: string): Promise<string | null>
-  async setMapping(key: string, uuid: string, ttl: number): Promise<void>
-
-  // Relationship cache
-  async cacheRelationships(entityType: string, relationships: any): Promise<void>
-  async getRelationships(entityType: string): Promise<any>
-
-  // Sync state cache
-  async updateSyncCheckpoint(entityType: string, timestamp: Date): Promise<void>
-  async getSyncCheckpoint(entityType: string): Promise<Date>
-}
-```
-
----
-
-### 7. 📋 **SYNC WORKFLOW IMPLEMENTATION**
-
-#### Daily Sync Workflow
-```typescript
-class DailySyncWorkflow {
-  async execute(): Promise<SyncResult> {
-    const startTime = new Date()
-    const lastSyncTime = await this.getLastSyncCheckpoint()
-
-    // Step 1: Change Detection (5-10 minutes)
-    const changes = await this.detectChanges(lastSyncTime)
-    console.log(`Detected ${changes.length} changes since ${lastSyncTime}`)
-
-    // Step 2: Dependency Ordering (1-2 minutes)
-    const orderedChanges = await this.orderByDependencies(changes)
-
-    // Step 3: Batch Processing (20-40 minutes)
-    const results = await this.processBatches(orderedChanges)
-
-    // Step 4: Conflict Resolution (5-15 minutes)
-    await this.resolveConflicts(results.conflicts)
-
-    // Step 5: Validation (10-20 minutes)
-    await this.validateSyncResults(results)
-
-    // Step 6: Checkpoint Update (1 minute)
-    await this.updateCheckpoint(startTime)
-
-    return results
-  }
-}
-```
-
-#### Weekly Sync Workflow
-```typescript
-class WeeklySyncWorkflow extends DailySyncWorkflow {
-  async execute(): Promise<SyncResult> {
-    // Enhanced weekly process with comprehensive validation
-    const result = await super.execute()
-
-    // Additional weekly-only operations
-    await this.performDeepValidation()
-    await this.optimizeUUIDCache()
-    await this.generateWeeklyReport()
-    await this.cleanupOldSyncLogs()
-
-    return result
-  }
-
-  private async performDeepValidation(): Promise<void> {
-    // Validate all relationships across entities
-    // Check financial data integrity
-    // Verify business rule compliance
-    // Generate comprehensive health report
-  }
-}
-```
-
-#### On-Demand Sync Implementation
-```typescript
-class OnDemandSyncWorkflow {
-  async executeSelective(config: SelectiveSyncConfig): Promise<SyncResult> {
-    const { entities, dateRange, priorities } = config
-
-    // 1. Filter changes by criteria
-    const changes = await this.getFilteredChanges(entities, dateRange)
-
-    // 2. Prioritize by business importance
-    const prioritizedChanges = this.prioritizeChanges(changes, priorities)
-
-    // 3. Execute sync with higher batch sizes for efficiency
-    const results = await this.processPrioritizedBatches(prioritizedChanges)
-
-    return results
-  }
-}
-```
-
----
-
-## 🏢 **COMPLEX TRANSFORMATION EXAMPLES**
-
-### Patient Record Transformation
-```typescript
-async function transformPatient(sourcePatient: any): Promise<any> {
-  return {
-    // UUID transformation
-    id: await uuidMapper.resolveUUID(sourcePatient.id, 'patient'),
-
-    // Foreign key transformations
-    office_id: await uuidMapper.resolveUUID(sourcePatient.office_id, 'office'),
-    profile_id: await uuidMapper.resolveUUID(sourcePatient.user_id, 'profile'),
-    doctor_id: await uuidMapper.resolveUUID(sourcePatient.doctor_id, 'doctor'),
-
-    // Direct field mappings
-    patient_number: sourcePatient.patient_number,
-    first_name: sourcePatient.first_name,
-    last_name: sourcePatient.last_name,
-
-    // Business logic transformations
-    status: mapPatientStatus(sourcePatient.status_id),
-    treatment_phase: calculateTreatmentPhase(sourcePatient),
-
-    // Metadata preservation
-    legacy_data: {
-      legacy_id: sourcePatient.id,
-      source_table: 'dispatch_patient',
-      original_status_id: sourcePatient.status_id,
-      migration_timestamp: new Date(),
-      sync_source: 'daily_sync'
-    },
-
-    // Audit fields
-    created_at: sourcePatient.created_at,
-    updated_at: new Date()
-  }
-}
-```
-
-### Operations Financial Data Transformation
-```typescript
-async function transformOperation(sourceOperation: any): Promise<any> {
-  // Get default case mapping
-  const defaultCase = await getDefaultCase()
-
-  return {
-    id: generateUUID(),
-    case_id: defaultCase.id,
-    operation_type: mapOperationType(sourceOperation.type),
-    amount: parseFloat(sourceOperation.price || '0'),
-    legacy_id: sourceOperation.id,
-
-    // Preserve all Square payment metadata
-    metadata: {
-      legacy_id: sourceOperation.id,
-      sq_order_id: sourceOperation.sq_order_id,
-      sq_payment_id: sourceOperation.sq_payment_id,
-      sq_refund_id: sourceOperation.sq_refund_id,
-      card_brand: sourceOperation.card_brand,
-      card_bin: sourceOperation.card_bin,
-      card_last: sourceOperation.card_last,
-      office_card: sourceOperation.office_card,
-      payment_id: sourceOperation.payment_id,
-      sync_timestamp: new Date()
-    },
-
-    created_at: sourceOperation.made_at || new Date(),
-    updated_at: new Date()
-  }
-}
-```
-
----
-
-## ⚡ **PERFORMANCE OPTIMIZATION STRATEGIES**
-
-### 1. **Batch Processing Optimization**
-```typescript
-class OptimizedBatchProcessor {
-  private async processInParallel(
-    batches: TransformationBatch[],
-    concurrencyLimit: number = 5
-  ): Promise<BatchResult[]> {
-
-    const semaphore = new Semaphore(concurrencyLimit)
-
-    return await Promise.all(
-      batches.map(async (batch) => {
-        await semaphore.acquire()
-        try {
-          return await this.processBatch(batch)
-        } finally {
-          semaphore.release()
-        }
-      })
-    )
-  }
-}
-```
-
-### 2. **UUID Mapping Optimization**
-```typescript
-class OptimizedUUIDMapper {
-  // Bulk pre-load mappings for known entity types
-  async preloadMappings(entityTypes: string[]): Promise<void> {
-    for (const entityType of entityTypes) {
-      const mappings = await this.postgres.query(`
-        SELECT legacy_id, entity_uuid
-        FROM uuid_mappings_enhanced
-        WHERE entity_type = $1 AND sync_status = 'active'
-      `, [entityType])
-
-      // Bulk load into Redis
-      const pipeline = this.redis.pipeline()
-      mappings.rows.forEach(row => {
-        pipeline.setex(`${entityType}:${row.legacy_id}`, 3600, row.entity_uuid)
-      })
-      await pipeline.exec()
-    }
-  }
-}
-```
-
-### 3. **Connection Pool Management**
-```typescript
-interface DatabasePoolConfig {
-  source: {
-    host: string
-    maxConnections: 20
-    idleTimeoutMs: 30000
-    acquireTimeoutMs: 60000
-  }
-  target: {
-    host: string
-    maxConnections: 30
-    idleTimeoutMs: 60000
-    acquireTimeoutMs: 120000
-  }
-}
-```
-
----
-
-## 🔧 **INFRASTRUCTURE REQUIREMENTS**
-
-### Application Server Specifications
+#### **Core Services**
 ```yaml
-# Production deployment requirements
-application_server:
-  cpu: 8 cores (minimum)
-  memory: 32GB RAM
-  storage: 500GB NVMe SSD
-  network: 10Gbps connection
-
-database_connections:
-  source_pool_size: 20 connections
-  target_pool_size: 30 connections
-  redis_connections: 10 connections
-
-monitoring:
-  prometheus_metrics: enabled
-  grafana_dashboard: included
-  alert_manager: configured
-  log_aggregation: elasticsearch
-```
-
-### Redis Cache Configuration
-```yaml
-redis_cluster:
-  nodes: 3 (HA setup)
-  memory_per_node: 8GB
-  persistence: RDB + AOF
-  replication: master-slave
-
-cache_configuration:
-  uuid_mappings_ttl: 3600s
-  relationship_cache_ttl: 1800s
-  sync_checkpoint_ttl: permanent
-  max_memory_policy: allkeys-lru
-```
-
-### Database Performance Tuning
-```sql
--- Source database indexes for sync queries
-CREATE INDEX CONCURRENTLY idx_dispatch_patient_updated_at
-ON dispatch_patient(updated_at) WHERE updated_at IS NOT NULL;
-
-CREATE INDEX CONCURRENTLY idx_dispatch_instruction_updated_at
-ON dispatch_instruction(updated_at) WHERE updated_at IS NOT NULL;
-
--- Target database indexes for lookup performance
-CREATE INDEX CONCURRENTLY idx_patients_legacy_id
-ON patients(legacy_patient_id);
-
-CREATE INDEX CONCURRENTLY idx_uuid_mappings_lookup
-ON uuid_mappings_enhanced(legacy_id, entity_type);
-```
-
----
-
-## 🔐 **ERROR HANDLING AND RECOVERY**
-
-### Comprehensive Error Recovery
-```typescript
-class ErrorRecoverySystem {
-  async handleSyncFailure(
-    job: SyncJob,
-    error: Error,
-    context: SyncContext
-  ): Promise<RecoveryAction> {
-
-    // Categorize error type
-    const errorCategory = this.categorizeError(error)
-
-    switch (errorCategory) {
-      case ErrorCategory.TRANSIENT_NETWORK:
-        return await this.retryWithBackoff(job, context)
-
-      case ErrorCategory.UUID_MAPPING_FAILURE:
-        return await this.rebuildMappingCache(context.entityType)
-
-      case ErrorCategory.SCHEMA_VALIDATION:
-        return await this.escalateSchemaIssue(error, context)
-
-      case ErrorCategory.FOREIGN_KEY_VIOLATION:
-        return await this.resolveDependencyIssue(error, context)
-
-      case ErrorCategory.BUSINESS_LOGIC_ERROR:
-        return await this.applyBusinessRuleOverride(error, context)
-
-      default:
-        return await this.escalateToOperations(error, context)
-    }
-  }
-}
-```
-
-### Checkpoint and Resume System
-```typescript
-class CheckpointManager {
-  async saveCheckpoint(syncJob: SyncJob, progress: SyncProgress): Promise<void> {
-    await this.postgres.query(`
-      INSERT INTO sync_checkpoints (
-        job_id, entity_type, last_processed_id,
-        records_processed, checkpoint_data, created_at
-      ) VALUES ($1, $2, $3, $4, $5, $6)
-      ON CONFLICT (job_id, entity_type) DO UPDATE SET
-        last_processed_id = EXCLUDED.last_processed_id,
-        records_processed = EXCLUDED.records_processed,
-        checkpoint_data = EXCLUDED.checkpoint_data,
-        updated_at = NOW()
-    `, [
-      syncJob.id,
-      progress.entityType,
-      progress.lastProcessedId,
-      progress.recordsProcessed,
-      JSON.stringify(progress.metadata),
-      new Date()
-    ])
-  }
-
-  async resumeFromCheckpoint(jobId: string): Promise<SyncProgress[]> {
-    const checkpoints = await this.postgres.query(`
-      SELECT * FROM sync_checkpoints
-      WHERE job_id = $1
-      ORDER BY updated_at DESC
-    `, [jobId])
-
-    return checkpoints.rows.map(row => ({
-      entityType: row.entity_type,
-      lastProcessedId: row.last_processed_id,
-      recordsProcessed: row.records_processed,
-      metadata: JSON.parse(row.checkpoint_data)
-    }))
-  }
-}
-```
-
----
-
-## ⚙️ **DEPLOYMENT ARCHITECTURE**
-
-### Microservices Deployment
-```yaml
-# Docker Compose production configuration
+# docker-compose.yml
 version: '3.8'
 services:
   sync-orchestrator:
-    build: ./services/orchestrator
+    image: sync-system:latest
     environment:
-      - NODE_ENV=production
-      - REDIS_URL=redis://redis-cluster:6379
+      - ROLE=orchestrator
+      - POSTGRES_READ_REPLICA_URL=${SOURCE_DB_URL}
+      - SUPABASE_URL=${TARGET_DB_URL}
+      - REDIS_URL=${REDIS_URL}
     depends_on:
-      - redis-cluster
-      - postgres-sync-db
+      - redis
+      - postgres-metrics
 
-  cdc-processor:
-    build: ./services/cdc-processor
+  dispatch-record-agent:
+    image: sync-system:latest
     environment:
-      - SOURCE_DB_HOST=${SOURCE_DB_HOST}
-      - TARGET_DB_HOST=${TARGET_DB_HOST}
+      - ROLE=dispatch_record_agent
+    scale: 3
 
-  uuid-mapping-service:
-    build: ./services/uuid-mapper
+  case-message-agent:
+    image: sync-system:latest
     environment:
-      - REDIS_URL=redis://redis-cluster:6379
-    depends_on:
-      - redis-cluster
+      - ROLE=case_message_agent
+    scale: 2
 
-  transformation-engine:
-    build: ./services/transformer
+  system-message-agent:
+    image: sync-system:latest
     environment:
-      - SCHEMA_CONFIG_PATH=/config/schemas
-    volumes:
-      - ./config:/config:ro
+      - ROLE=system_message_agent
+    scale: 2
 
-  conflict-resolver:
-    build: ./services/conflict-resolver
+  mapping-cache-agent:
+    image: sync-system:latest
     environment:
-      - ESCALATION_WEBHOOK_URL=${ESCALATION_WEBHOOK}
+      - ROLE=mapping_cache_agent
 
-  monitoring-service:
-    build: ./services/monitoring
-    ports:
-      - "3000:3000"
+  redis:
+    image: redis:7-alpine
+    command: redis-server --maxmemory 2gb --maxmemory-policy allkeys-lru
+
+  postgres-metrics:
+    image: postgres:15
     environment:
-      - PROMETHEUS_URL=prometheus:9090
+      - POSTGRES_DB=sync_metrics
 ```
 
-### Kubernetes Production Deployment
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: sync-orchestrator
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: sync-orchestrator
-  template:
-    spec:
-      containers:
-      - name: sync-orchestrator
-        image: sync-platform/orchestrator:v1.0
-        resources:
-          requests:
-            memory: "4Gi"
-            cpu: "2"
-          limits:
-            memory: "8Gi"
-            cpu: "4"
-        env:
-        - name: REDIS_URL
-          valueFrom:
-            secretKeyRef:
-              name: sync-secrets
-              key: redis-url
+#### **Monitoring & Alerting**
+```typescript
+interface SyncSystemMetrics {
+  changeLogLag: number // Seconds behind source
+  processingThroughput: number // Changes per minute
+  errorRate: number // Percentage of failed syncs
+  mappingCacheHitRate: number // Cache efficiency
+  relationshipResolutionTime: number // Average resolution time
+  agentHealth: Map<string, AgentStatus>
+}
+
+class MetricsCollector {
+  async collectMetrics(): Promise<SyncSystemMetrics> {
+    return {
+      changeLogLag: await this.calculateChangeLogLag(),
+      processingThroughput: await this.calculateThroughput(),
+      errorRate: await this.calculateErrorRate(),
+      mappingCacheHitRate: await this.calculateCacheHitRate(),
+      relationshipResolutionTime: await this.calculateResolutionTime(),
+      agentHealth: await this.checkAgentHealth()
+    }
+  }
+}
 ```
 
 ---
 
-## 📊 **IMPLEMENTATION TIMELINE & COSTS**
+## 🛡️ ERROR HANDLING & RECOVERY
 
-### Development Phase Breakdown
-| Phase | Duration | Effort | Key Deliverables |
-|-------|----------|---------|-----------------|
-| **Phase 1: Core CDC System** | 3-4 weeks | 120 hours | Change detection, basic transformation |
-| **Phase 2: UUID Mapping Service** | 2-3 weeks | 80 hours | Caching, persistence, lookup optimization |
-| **Phase 3: Transformation Engine** | 4-5 weeks | 160 hours | Schema definitions, business logic |
-| **Phase 4: Conflict Resolution** | 2-3 weeks | 80 hours | Strategy implementation, escalation |
-| **Phase 5: Orchestration** | 3-4 weeks | 120 hours | Scheduling, monitoring, error handling |
-| **Phase 6: Testing & Deployment** | 2-3 weeks | 80 hours | Integration testing, production deployment |
-| **TOTAL DEVELOPMENT** | **16-22 weeks** | **640-800 hours** | Complete sync platform |
+### **Multi-Level Error Recovery**
+```typescript
+interface ErrorRecoveryStrategy {
+  immediateRetry: {
+    maxAttempts: 3
+    backoffMs: [1000, 5000, 15000]
+    applicableErrors: ['connection_timeout', 'temporary_lock', 'rate_limit']
+  }
 
-### Infrastructure Costs (Monthly)
-| Component | Daily Sync | Weekly Sync | On-Demand |
-|-----------|------------|-------------|-----------|
-| **Application Servers** | $200-300 | $120-180 | $60-100 |
-| **Redis Cluster** | $150-200 | $100-150 | $50-80 |
-| **Database Connections** | $100-150 | $60-100 | $30-60 |
-| **Monitoring Stack** | $50-80 | $30-50 | $20-40 |
-| **Storage & Backup** | $80-120 | $50-80 | $30-50 |
-| **Network Transfer** | $70-100 | $40-70 | $20-40 |
-| **TOTAL MONTHLY** | **$650-950** | **$400-630** | **$210-370** |
+  delayedRetry: {
+    delayMinutes: [5, 15, 60, 240]
+    applicableErrors: ['mapping_not_found', 'relationship_resolution_failed']
+  }
 
-### Development Investment
-- **Total Development Cost:** $128,000 - $160,000 (at $200/hour)
-- **Time to Production:** 4-6 months
-- **Ongoing Maintenance:** $20,000 - $30,000/year
-- **ROI Timeline:** 12-18 months
+  manualIntervention: {
+    alertChannels: ['slack', 'email', 'pagerduty']
+    applicableErrors: ['data_corruption', 'schema_mismatch', 'critical_dependency_missing']
+  }
 
----
-
-## 🎯 **RECOMMENDED IMPLEMENTATION STRATEGY**
-
-### Phase 1: MVP Implementation (8-10 weeks)
-**Goal:** Basic weekly sync functionality
-**Features:**
-- Timestamp-based CDC
-- Core UUID mapping service
-- Basic transformation for top 5 entities
-- Simple conflict resolution (source-wins)
-- Basic monitoring and alerting
-
-### Phase 2: Production Enhancement (4-6 weeks)
-**Goal:** Production-ready with advanced features
-**Features:**
-- Advanced conflict resolution strategies
-- Comprehensive validation framework
-- Performance optimization
-- Advanced monitoring and dashboards
-- Error recovery and rollback capabilities
-
-### Phase 3: Advanced Capabilities (4-6 weeks)
-**Goal:** Full-featured sync platform
-**Features:**
-- On-demand sync capabilities
-- Advanced business rule engine
-- AI-powered conflict resolution
-- Predictive sync optimization
-- Multi-tenant support
+  gracefulDegradation: {
+    skipNonCritical: true
+    preserveOrder: true
+    applicableErrors: ['non_critical_field_missing', 'optional_relationship_failed']
+  }
+}
+```
 
 ---
 
-## 🔮 **FUTURE CONSIDERATIONS**
+## 📊 PERFORMANCE SPECIFICATIONS
 
-### Scalability Enhancements
-1. **Horizontal Scaling:** Multi-node orchestrator deployment
-2. **Database Sharding:** Partition sync operations by entity type
-3. **Edge Computing:** Regional sync nodes for global deployments
-4. **AI Integration:** Machine learning for conflict prediction and resolution
+### **Throughput Targets**
+- **Change Detection**: <30 second lag from source to detection
+- **Simple Records**: 500+ records/minute (dispatch_record, dispatch_notification)
+- **Complex Relationships**: 100+ records/minute (dispatch_comment, dispatch_file)
+- **Mapping Cache**: 99%+ hit rate for frequently accessed mappings
+- **Error Rate**: <0.1% for steady-state operations
 
-### Advanced Features
-1. **Bidirectional Sync:** Handle changes flowing from target back to source
-2. **Multi-Source Sync:** Integrate additional data sources
-3. **Real-time Streaming:** Sub-second latency for critical data
-4. **Advanced Analytics:** Sync performance optimization using ML
-
----
-
-## 🏁 **CONCLUSION**
-
-Implementing continuous synchronization for this migration requires **sophisticated custom software** due to the unique complexity of our transformations:
-
-### 💡 **Key Technical Challenges**
-1. **UUID Mapping Complexity:** Requires persistent, high-performance mapping service
-2. **Schema Transformation Depth:** 7+ entity types with complex business logic
-3. **Relationship Preservation:** Foreign key integrity across millions of records
-4. **Financial Data Accuracy:** Zero-tolerance for transaction errors
-5. **Scale Requirements:** Handle 2M+ records efficiently
-
-### 🛠️ **Custom Software Required**
-- **Estimated Development:** 640-800 hours (4-6 months)
-- **Infrastructure Investment:** $210-950/month depending on sync frequency
-- **Total Project Cost:** $140K-190K including first year operations
-- **Technical Team:** 2-3 senior engineers plus DevOps support
-
-### 🏆 **Strategic Recommendation**
-**Start with Weekly Sync MVP** (Phase 1) to validate architecture and demonstrate value, then enhance with advanced features based on business needs and usage patterns.
-
-This comprehensive custom software platform would provide **enterprise-grade synchronization** matching the exceptional quality of our initial migration (99.1% success rate, $8.56M+ preserved).
+### **Scalability Design**
+- **Horizontal Scaling**: Each agent type can scale independently
+- **Queue-Based**: Handles traffic spikes via Redis queues
+- **Circuit Breakers**: Automatic degradation during overload
+- **Resource Monitoring**: Auto-scaling based on queue depth and processing time
 
 ---
 
-**Document Author:** Claude Code Technical Architecture Team
-**Review Status:** Ready for Technical Review and Business Approval
-**Implementation Priority:** High - Foundation for Ongoing Business Operations
-**Next Action:** Technical feasibility review and budget approval process
+## 🏁 IMPLEMENTATION ROADMAP
+
+### **Phase 1: Core Infrastructure (Weeks 1-4)**
+1. **Week 1-2**: Change detection system with PostgreSQL triggers
+2. **Week 3**: UUID mapping cache with Redis integration
+3. **Week 4**: Basic relationship resolver with ContentType support
+
+### **Phase 2: Agent Development (Weeks 5-8)**
+1. **Week 5**: Dispatch Record Sync Agent (ContentType-aware)
+2. **Week 6**: Case Message Sync Agent (multi-table chains)
+3. **Week 7**: System Message Sync Agent (template processing)
+4. **Week 8**: Sync Orchestrator with dependency management
+
+### **Phase 3: Production Deployment (Weeks 9-12)**
+1. **Week 9**: Error handling and recovery systems
+2. **Week 10**: Monitoring, metrics, and alerting
+3. **Week 11**: Load testing and performance optimization
+4. **Week 12**: Production deployment and validation
+
+### **Phase 4: Advanced Features (Weeks 13-16)**
+1. **Week 13**: File relationship sync agent
+2. **Week 14**: Operations/financial data sync agent
+3. **Week 15**: Advanced conflict resolution
+4. **Week 16**: Performance optimization and cost reduction
+
+---
+
+## 💰 COST ANALYSIS
+
+### **Infrastructure Costs (Monthly)**
+- **Compute**: $400-600 (multiple agent containers)
+- **Redis Cache**: $100-150 (2GB high-performance cache)
+- **Metrics Database**: $50-100 (sync monitoring)
+- **Monitoring Tools**: $100-200 (Datadog/New Relic)
+- **Total Estimated**: $650-1,050/month
+
+### **Development Costs (One-time)**
+- **Senior Backend Developer**: 16 weeks × $8,000 = $128,000
+- **DevOps Engineer**: 4 weeks × $6,000 = $24,000
+- **Testing & QA**: 4 weeks × $4,000 = $16,000
+- **Total Development**: ~$168,000
+
+### **ROI Analysis**
+- **Manual Sync Cost**: $50,000+ per manual synchronization
+- **Business Continuity Value**: $500,000+ (avoiding data staleness issues)
+- **Payback Period**: 4-6 months
+- **5-Year NPV**: $2.1M+ (assuming quarterly manual syncs avoided)
+
+---
+
+## 🎯 SUCCESS METRICS
+
+### **Technical KPIs**
+- **Data Freshness**: 99%+ of changes synced within 2 minutes
+- **Accuracy**: 99.9%+ data integrity across all entity types
+- **Availability**: 99.9% uptime for sync system
+- **Performance**: <5% impact on source database performance
+
+### **Business KPIs**
+- **Operational Efficiency**: 90%+ reduction in manual sync effort
+- **Data Quality**: Zero critical business decisions based on stale data
+- **Compliance**: 100% audit trail preservation
+- **Cost Efficiency**: 70%+ reduction in data synchronization costs
+
+---
+
+**Document Status:** Ready for Technical Review & Implementation
+**Next Steps:** Detailed technical specification for Phase 1 components
+**Approval Required:** Architecture Committee & Engineering Leadership
