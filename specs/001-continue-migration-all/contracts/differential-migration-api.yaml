@@ -1,0 +1,496 @@
+openapi: 3.0.3
+info:
+  title: Differential Database Migration API
+  description: CLI and programmatic interfaces for differential database migration operations
+  version: 1.0.0
+  contact:
+    name: Database Migration System
+    email: support@migration-system.local
+
+servers:
+  - url: http://localhost:3000
+    description: Local development server
+
+paths:
+  /api/migration/baseline:
+    post:
+      summary: Analyze current migration baseline
+      description: Establish baseline by comparing record counts and identifying migration status
+      operationId: analyzeBaseline
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BaselineAnalysisRequest'
+      responses:
+        '200':
+          description: Baseline analysis completed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BaselineAnalysisResponse'
+        '400':
+          description: Invalid request parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error during analysis
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/migration/differential:
+    post:
+      summary: Perform differential analysis
+      description: Identify new, modified, and deleted records since last migration
+      operationId: performDifferentialAnalysis
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DifferentialAnalysisRequest'
+      responses:
+        '200':
+          description: Differential analysis completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DifferentialAnalysisResponse'
+        '400':
+          description: Invalid request parameters
+        '500':
+          description: Analysis failed
+
+  /api/migration/execute:
+    post:
+      summary: Execute differential migration
+      description: Migrate identified differential records with checkpoint support
+      operationId: executeDifferentialMigration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MigrationExecutionRequest'
+      responses:
+        '200':
+          description: Migration started successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MigrationExecutionResponse'
+        '400':
+          description: Invalid migration parameters
+        '409':
+          description: Migration already in progress
+
+  /api/migration/status/{sessionId}:
+    get:
+      summary: Get migration status
+      description: Retrieve current status of migration session
+      operationId: getMigrationStatus
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Migration session identifier
+      responses:
+        '200':
+          description: Migration status retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MigrationStatusResponse'
+        '404':
+          description: Migration session not found
+
+  /api/migration/pause/{sessionId}:
+    post:
+      summary: Pause migration
+      description: Pause running migration and save checkpoint
+      operationId: pauseMigration
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Migration paused successfully
+        '404':
+          description: Migration session not found
+        '409':
+          description: Migration not in running state
+
+  /api/migration/resume/{sessionId}:
+    post:
+      summary: Resume migration
+      description: Resume paused migration from last checkpoint
+      operationId: resumeMigration
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Migration resumed successfully
+        '404':
+          description: Migration session not found
+        '409':
+          description: Migration not in paused state
+
+  /api/migration/logs/{sessionId}:
+    get:
+      summary: Get migration logs
+      description: Retrieve execution logs for migration session
+      operationId: getMigrationLogs
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: logLevel
+          in: query
+          schema:
+            type: string
+            enum: [debug, info, warn, error]
+          description: Filter logs by level
+        - name: entityType
+          in: query
+          schema:
+            type: string
+          description: Filter logs by entity type
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+      responses:
+        '200':
+          description: Logs retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MigrationLogsResponse'
+
+components:
+  schemas:
+    BaselineAnalysisRequest:
+      type: object
+      required:
+        - entities
+      properties:
+        entities:
+          type: array
+          items:
+            type: string
+          description: List of entities to analyze (empty for all)
+          example: ["offices", "doctors", "patients"]
+        includeMapping:
+          type: boolean
+          default: true
+          description: Include UUID mapping analysis
+
+    BaselineAnalysisResponse:
+      type: object
+      properties:
+        analysisId:
+          type: string
+          format: uuid
+        timestamp:
+          type: string
+          format: date-time
+        entitySummary:
+          type: array
+          items:
+            $ref: '#/components/schemas/EntityAnalysisSummary'
+        overallStatus:
+          type: string
+          enum: [complete, partial, failed]
+        totalRecords:
+          type: integer
+        migrationGaps:
+          type: array
+          items:
+            $ref: '#/components/schemas/MigrationGap'
+
+    EntityAnalysisSummary:
+      type: object
+      properties:
+        entityType:
+          type: string
+        sourceCount:
+          type: integer
+        destinationCount:
+          type: integer
+        mappingCount:
+          type: integer
+        lastMigrationTimestamp:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [synced, behind, ahead, missing]
+
+    MigrationGap:
+      type: object
+      properties:
+        entityType:
+          type: string
+        missingRecords:
+          type: integer
+        orphanedMappings:
+          type: integer
+        inconsistentData:
+          type: integer
+
+    DifferentialAnalysisRequest:
+      type: object
+      required:
+        - entities
+      properties:
+        entities:
+          type: array
+          items:
+            type: string
+        sinceTimestamp:
+          type: string
+          format: date-time
+          description: Override default last migration timestamp
+        includeDeleted:
+          type: boolean
+          default: true
+          description: Include soft-deleted records in analysis
+
+    DifferentialAnalysisResponse:
+      type: object
+      properties:
+        analysisId:
+          type: string
+          format: uuid
+        entityResults:
+          type: array
+          items:
+            $ref: '#/components/schemas/EntityDifferentialResult'
+        totalChanges:
+          type: integer
+        estimatedMigrationTime:
+          type: string
+          description: Estimated time in human-readable format
+
+    EntityDifferentialResult:
+      type: object
+      properties:
+        entityType:
+          type: string
+        newRecords:
+          type: integer
+        modifiedRecords:
+          type: integer
+        deletedRecords:
+          type: integer
+        changePercentage:
+          type: number
+          format: float
+        lastAnalyzed:
+          type: string
+          format: date-time
+
+    MigrationExecutionRequest:
+      type: object
+      required:
+        - analysisId
+      properties:
+        analysisId:
+          type: string
+          format: uuid
+          description: Reference to differential analysis result
+        entities:
+          type: array
+          items:
+            type: string
+          description: Specific entities to migrate (empty for all)
+        batchSize:
+          type: integer
+          minimum: 100
+          maximum: 5000
+          default: 1000
+        parallelExecution:
+          type: boolean
+          default: true
+          description: Enable parallel processing of independent entities
+        dryRun:
+          type: boolean
+          default: false
+          description: Simulate migration without making changes
+
+    MigrationExecutionResponse:
+      type: object
+      properties:
+        sessionId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [started, queued, failed]
+        entitiesQueued:
+          type: array
+          items:
+            type: string
+        estimatedCompletion:
+          type: string
+          format: date-time
+
+    MigrationStatusResponse:
+      type: object
+      properties:
+        sessionId:
+          type: string
+          format: uuid
+        overallStatus:
+          type: string
+          enum: [pending, running, paused, completed, failed]
+        entitiesPending:
+          type: array
+          items:
+            type: string
+        entitiesRunning:
+          type: array
+          items:
+            type: string
+        entitiesCompleted:
+          type: array
+          items:
+            type: string
+        entitiesFailed:
+          type: array
+          items:
+            type: string
+        totalRecordsProcessed:
+          type: integer
+        totalRecordsRemaining:
+          type: integer
+        progressPercentage:
+          type: number
+          format: float
+        estimatedCompletion:
+          type: string
+          format: date-time
+        performanceMetrics:
+          $ref: '#/components/schemas/PerformanceMetrics'
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/MigrationError'
+
+    PerformanceMetrics:
+      type: object
+      properties:
+        recordsPerSecond:
+          type: number
+          format: float
+        averageBatchTime:
+          type: number
+          format: float
+          description: Average batch processing time in seconds
+        memoryUsage:
+          type: integer
+          description: Current memory usage in MB
+        connectionPoolStatus:
+          type: object
+          properties:
+            sourceConnections:
+              type: integer
+            destinationConnections:
+              type: integer
+            activeQueries:
+              type: integer
+
+    MigrationError:
+      type: object
+      properties:
+        entityType:
+          type: string
+        errorType:
+          type: string
+          enum: [connection, validation, transformation, constraint]
+        message:
+          type: string
+        recordId:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        retryable:
+          type: boolean
+
+    MigrationLogsResponse:
+      type: object
+      properties:
+        sessionId:
+          type: string
+          format: uuid
+        logs:
+          type: array
+          items:
+            $ref: '#/components/schemas/LogEntry'
+        totalCount:
+          type: integer
+        hasMore:
+          type: boolean
+
+    LogEntry:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        timestamp:
+          type: string
+          format: date-time
+        level:
+          type: string
+          enum: [debug, info, warn, error]
+        entityType:
+          type: string
+        operationType:
+          type: string
+        message:
+          type: string
+        context:
+          type: object
+        recordId:
+          type: string
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+        timestamp:
+          type: string
+          format: date-time
+        requestId:
+          type: string
+          format: uuid
