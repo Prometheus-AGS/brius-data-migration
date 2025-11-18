@@ -478,6 +478,7 @@ npx ts-node src/data-validator.ts validate --entities doctors --type data_integr
 ## Active Technologies
 - TypeScript 5.9+ with Node.js 18+ + pg (node-postgres), @supabase/supabase-js, dotenv (001-continue-migration-all)
 - PostgreSQL (source) → Supabase/PostgreSQL (destination) with UUID-based schemas (001-continue-migration-all)
+- Source: PostgreSQL legacy system, Destination: Supabase/PostgreSQL with UUID-based schemas (001-full-database-migration)
 
 ## Recent Changes
 - 001-continue-migration-all: Added TypeScript 5.9+ with Node.js 18+ + pg (node-postgres), @supabase/supabase-js, dotenv
