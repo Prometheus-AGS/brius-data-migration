@@ -1,23 +1,16 @@
-// Database Connection Utility
-// Extends existing migration patterns for standardized database connections
+/**
+ * Enhanced Database Connection Management
+ *
+ * Provides robust connection pooling, health monitoring, and connection management
+ * for both source (legacy PostgreSQL) and destination (Supabase) databases.
+ * Enhanced version that integrates with environment-config.ts for the full migration system.
+ */
 
 import { Pool, PoolClient, PoolConfig } from 'pg';
-import * as dotenv from 'dotenv';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { getConfig, DatabaseConfig, configUtils } from './environment-config';
 
-// Load environment variables
-dotenv.config();
-
-export interface DatabaseConfig {
-  host: string;
-  port: number;
-  database: string;
-  user: string;
-  password: string;
-  ssl?: boolean;
-  max?: number;
-  idleTimeoutMillis?: number;
-  connectionTimeoutMillis?: number;
-}
+// DatabaseConfig is imported from environment-config.ts
 
 export interface ConnectionPoolStats {
   totalCount: number;
@@ -40,6 +33,7 @@ export interface TransactionContext {
 export class DatabaseConnectionManager {
   private pools: Map<string, Pool> = new Map();
   private configs: Map<string, DatabaseConfig> = new Map();
+  private supabaseClient: SupabaseClient | null = null;
 
   /**
    * Initialize connection manager with default configurations
@@ -49,35 +43,40 @@ export class DatabaseConnectionManager {
   }
 
   /**
-   * Initialize default database configurations from environment variables
+   * Initialize default database configurations from centralized config
    */
   private initializeDefaultConfigs(): void {
-    // Source database configuration (legacy)
-    const sourceConfig: DatabaseConfig = {
-      host: process.env.SOURCE_DB_HOST || 'localhost',
-      port: parseInt(process.env.SOURCE_DB_PORT || '5432'),
-      database: process.env.SOURCE_DB_NAME || 'dispatch_dev',
-      user: process.env.SOURCE_DB_USER || 'postgres',
-      password: process.env.SOURCE_DB_PASSWORD || '',
-      max: parseInt(process.env.SOURCE_DB_MAX_CONNECTIONS || '20'),
-      idleTimeoutMillis: parseInt(process.env.SOURCE_DB_IDLE_TIMEOUT || '30000'),
-      connectionTimeoutMillis: parseInt(process.env.SOURCE_DB_CONNECTION_TIMEOUT || '60000')
-    };
+    const config = getConfig();
 
-    // Target database configuration (Supabase)
-    const targetConfig: DatabaseConfig = {
-      host: process.env.TARGET_DB_HOST || 'localhost',
-      port: parseInt(process.env.TARGET_DB_PORT || '54322'),
-      database: process.env.TARGET_DB_NAME || 'postgres',
-      user: process.env.TARGET_DB_USER || 'supabase_admin',
-      password: process.env.TARGET_DB_PASSWORD || 'postgres',
-      max: parseInt(process.env.TARGET_DB_MAX_CONNECTIONS || '20'),
-      idleTimeoutMillis: parseInt(process.env.TARGET_DB_IDLE_TIMEOUT || '30000'),
-      connectionTimeoutMillis: parseInt(process.env.TARGET_DB_CONNECTION_TIMEOUT || '60000')
-    };
+    // Use centralized configuration
+    this.addConfig('source', config.source);
+    this.addConfig('destination', config.destination);
 
-    this.addConfig('source', sourceConfig);
-    this.addConfig('target', targetConfig);
+    // Initialize Supabase client if configured
+    if (config.supabase.url && config.supabase.serviceRoleKey) {
+      this.supabaseClient = createClient(config.supabase.url, config.supabase.serviceRoleKey, {
+        auth: {
+          autoRefreshToken: false,
+          persistSession: false,
+        },
+        global: {
+          headers: {
+            'X-Client-Info': 'full-database-migration-system',
+          },
+        },
+      });
+      console.log('🚀 Supabase client initialized');
+    }
+  }
+
+  /**
+   * Get Supabase client
+   */
+  getSupabaseClient(): SupabaseClient {
+    if (!this.supabaseClient) {
+      throw new Error('Supabase client not initialized. Check SUPABASE_URL and SUPABASE_SERVICE_ROLE environment variables.');
+    }
+    return this.supabaseClient;
   }
 
   /**
@@ -136,10 +135,10 @@ export class DatabaseConnectionManager {
   }
 
   /**
-   * Get target database pool (Supabase)
+   * Get destination database pool (Supabase)
    */
-  getTargetPool(): Pool {
-    return this.getPool('target');
+  getDestinationPool(): Pool {
+    return this.getPool('destination');
   }
 
   /**
@@ -173,10 +172,10 @@ export class DatabaseConnectionManager {
   }
 
   /**
-   * Execute a query on target database
+   * Execute a query on destination database
    */
-  async queryTarget<T = any>(text: string, params?: any[]): Promise<QueryResult<T>> {
-    return this.query<T>('target', text, params);
+  async queryDestination<T = any>(text: string, params?: any[]): Promise<QueryResult<T>> {
+    return this.query<T>('destination', text, params);
   }
 
   /**
@@ -236,12 +235,12 @@ export class DatabaseConnectionManager {
   }
 
   /**
-   * Execute a function within a transaction on target database
+   * Execute a function within a transaction on destination database
    */
-  async withTargetTransaction<T>(
+  async withDestinationTransaction<T>(
     operation: (client: PoolClient) => Promise<T>
   ): Promise<T> {
-    return this.withTransaction('target', operation);
+    return this.withTransaction('destination', operation);
   }
 
   /**
@@ -491,14 +490,20 @@ export async function withSourceConnection<T>(
   return operation(dbConnections.getSourcePool());
 }
 
-export async function withTargetConnection<T>(
+export async function withDestinationConnection<T>(
   operation: (pool: Pool) => Promise<T>
 ): Promise<T> {
-  return operation(dbConnections.getTargetPool());
+  return operation(dbConnections.getDestinationPool());
 }
 
-export async function withTargetTransaction<T>(
+export async function withDestinationTransaction<T>(
   operation: (client: PoolClient) => Promise<T>
 ): Promise<T> {
-  return dbConnections.withTargetTransaction(operation);
+  return dbConnections.withDestinationTransaction(operation);
+}
+
+export async function withSupabaseClient<T>(
+  operation: (client: SupabaseClient) => Promise<T>
+): Promise<T> {
+  return operation(dbConnections.getSupabaseClient());
 }

@@ -1,0 +1,211 @@
+{
+  "checkpoints": [
+    {
+      "id": "checkpoint-001",
+      "entity_type": "offices",
+      "migration_run_id": "run-2025-10-26-001",
+      "last_processed_id": "10",
+      "batch_position": 2,
+      "records_processed": 100,
+      "records_remaining": 50,
+      "checkpoint_data": {
+        "batch_size": 50,
+        "processing_start": "2025-10-26T10:00:00Z",
+        "errors_encountered": 0
+      }
+    },
+    {
+      "id": "checkpoint-002",
+      "entity_type": "doctors",
+      "migration_run_id": "run-2025-10-26-001",
+      "last_processed_id": "25",
+      "batch_position": 5,
+      "records_processed": 250,
+      "records_remaining": 25,
+      "checkpoint_data": {
+        "batch_size": 50,
+        "processing_start": "2025-10-26T10:05:00Z",
+        "errors_encountered": 2
+      }
+    }
+  ],
+  "analysisResults": [
+    {
+      "id": "analysis-001",
+      "entity_type": "offices",
+      "source_record_count": 150,
+      "destination_record_count": 145,
+      "new_records": ["151", "152", "153", "154", "155"],
+      "modified_records": ["10", "25", "47"],
+      "deleted_records": ["100"],
+      "last_migration_timestamp": "2025-10-25T14:30:00Z",
+      "analysis_metadata": {
+        "analysis_duration_ms": 1250,
+        "comparison_method": "timestamp_based",
+        "detected_schema_changes": false
+      }
+    },
+    {
+      "id": "analysis-002",
+      "entity_type": "doctors",
+      "source_record_count": 275,
+      "destination_record_count": 270,
+      "new_records": ["276", "277", "278", "279", "280"],
+      "modified_records": ["15", "32", "89", "156"],
+      "deleted_records": [],
+      "last_migration_timestamp": "2025-10-25T14:30:00Z",
+      "analysis_metadata": {
+        "analysis_duration_ms": 2100,
+        "comparison_method": "timestamp_based",
+        "detected_schema_changes": false
+      }
+    }
+  ],
+  "migrationStatus": [
+    {
+      "id": "status-001",
+      "migration_session_id": "session-2025-10-26-001",
+      "overall_status": "running",
+      "entities_pending": ["patients", "orders"],
+      "entities_running": ["doctors"],
+      "entities_completed": ["offices"],
+      "entities_failed": [],
+      "total_records_processed": 1250,
+      "total_records_remaining": 800,
+      "performance_metrics": {
+        "records_per_second": 125.5,
+        "average_batch_time_ms": 450,
+        "memory_usage_mb": 256,
+        "connection_pool_active": 6
+      },
+      "started_at": "2025-10-26T10:00:00Z"
+    }
+  ],
+  "executionLogs": [
+    {
+      "id": "log-001",
+      "migration_session_id": "session-2025-10-26-001",
+      "entity_type": "offices",
+      "operation_type": "record_migration",
+      "log_level": "info",
+      "message": "Successfully migrated batch of 50 office records",
+      "context_data": {
+        "batch_number": 1,
+        "batch_size": 50,
+        "processing_time_ms": 425
+      }
+    },
+    {
+      "id": "log-002",
+      "migration_session_id": "session-2025-10-26-001",
+      "entity_type": "doctors",
+      "operation_type": "record_migration",
+      "record_id": "123",
+      "log_level": "warn",
+      "message": "Doctor record has missing office reference, using default office",
+      "context_data": {
+        "original_office_id": 999,
+        "default_office_id": 1,
+        "record_id": 123
+      }
+    },
+    {
+      "id": "log-003",
+      "migration_session_id": "session-2025-10-26-001",
+      "entity_type": "patients",
+      "operation_type": "validation",
+      "record_id": "456",
+      "log_level": "error",
+      "message": "Patient record validation failed: invalid date of birth",
+      "error_details": {
+        "validation_rule": "date_range_check",
+        "provided_value": "2030-01-01",
+        "expected_range": "1900-01-01 to 2025-01-01"
+      },
+      "context_data": {
+        "record_id": 456,
+        "validation_step": "pre_migration"
+      }
+    }
+  ],
+  "schemaMappings": [
+    {
+      "entity_type": "offices",
+      "source_table": "dispatch_office",
+      "destination_table": "offices",
+      "field_mappings": [
+        {
+          "source_field": "id",
+          "destination_field": "legacy_office_id",
+          "data_type": "integer",
+          "is_required": true
+        },
+        {
+          "source_field": "name",
+          "destination_field": "name",
+          "data_type": "string",
+          "is_required": true
+        },
+        {
+          "source_field": "address",
+          "destination_field": "address",
+          "data_type": "string",
+          "is_required": false
+        }
+      ],
+      "validation_rules": [
+        {
+          "field_name": "name",
+          "rule_type": "required",
+          "rule_parameters": {}
+        },
+        {
+          "field_name": "name",
+          "rule_type": "format",
+          "rule_parameters": {
+            "max_length": 255
+          }
+        }
+      ],
+      "version": "1.0.0",
+      "is_active": true
+    }
+  ],
+  "testScenarios": {
+    "dailyIncrementalSync": {
+      "description": "Simulate daily incremental sync with minimal changes",
+      "source_changes": {
+        "new_records": 10,
+        "modified_records": 5,
+        "deleted_records": 1
+      },
+      "expected_processing_time_seconds": 120,
+      "expected_success_rate": 0.99
+    },
+    "recoveryFromFailure": {
+      "description": "Simulate recovery from failed migration using checkpoints",
+      "failure_point": {
+        "entity": "doctors",
+        "batch_position": 3,
+        "records_processed": 150
+      },
+      "recovery_expectations": {
+        "resume_from_checkpoint": true,
+        "no_data_duplication": true,
+        "completion_success": true
+      }
+    },
+    "largeBacklogProcessing": {
+      "description": "Simulate processing of significant data backlog",
+      "backlog_size": {
+        "total_records": 50000,
+        "change_percentage": 15
+      },
+      "performance_expectations": {
+        "max_processing_time_minutes": 45,
+        "min_throughput_records_per_second": 1000,
+        "max_memory_usage_mb": 512
+      }
+    }
+  }
+}

@@ -1,0 +1,719 @@
+openapi: 3.0.3
+info:
+  title: Full Database Migration API
+  description: |
+    Comprehensive database migration system API for migrating from legacy PostgreSQL
+    to modern Supabase infrastructure with schema cleanup and incremental updates.
+  version: 1.0.0
+  contact:
+    name: Database Migration Team
+    email: db-team@company.com
+
+servers:
+  - url: http://localhost:3000/api/v1
+    description: Local development
+  - url: https://migration-api.company.com/api/v1
+    description: Production
+
+paths:
+  /migrations:
+    post:
+      summary: Start Full Database Migration
+      description: |
+        Initiates a comprehensive database migration with optional schema cleanup.
+        This is the primary endpoint implementing FR-001 through FR-014.
+      operationId: startFullMigration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MigrationRequest'
+            examples:
+              full_migration:
+                summary: Complete migration with schema cleanup
+                value:
+                  migration_type: "full_migration"
+                  include_schema_cleanup: true
+                  incremental_only: false
+                  entity_filters: []
+                  configuration:
+                    batch_size: 1000
+                    max_parallel_entities: 4
+                    enable_rollback: true
+              incremental_update:
+                summary: Incremental updates only
+                value:
+                  migration_type: "incremental"
+                  include_schema_cleanup: false
+                  incremental_only: true
+                  entity_filters: ["profiles", "orders", "products"]
+      responses:
+        '201':
+          description: Migration started successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MigrationStatusResponse'
+        '400':
+          description: Invalid migration request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Migration already in progress
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    get:
+      summary: List Migration History
+      description: Retrieve history of all migration executions
+      operationId: getMigrationHistory
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, running, completed, failed, rolling_back]
+      responses:
+        '200':
+          description: Migration history retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  migrations:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/MigrationSummary'
+                  total_count:
+                    type: integer
+                  has_more:
+                    type: boolean
+
+  /migrations/{migrationId}:
+    get:
+      summary: Get Migration Status
+      description: Retrieve detailed status and progress of specific migration
+      operationId: getMigrationStatus
+      parameters:
+        - name: migrationId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Migration status retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MigrationStatusResponse'
+        '404':
+          description: Migration not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    delete:
+      summary: Cancel Migration
+      description: Cancel running migration (implements rollback capability from FR-014)
+      operationId: cancelMigration
+      parameters:
+        - name: migrationId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                force_rollback:
+                  type: boolean
+                  description: Whether to force rollback of completed entities
+                  default: false
+                rollback_reason:
+                  type: string
+                  description: Reason for cancellation
+      responses:
+        '200':
+          description: Migration cancelled successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MigrationStatusResponse'
+        '400':
+          description: Cannot cancel migration in current state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /migrations/{migrationId}/resume:
+    post:
+      summary: Resume Migration from Checkpoint
+      description: Resume interrupted migration from last checkpoint (implements FR-007)
+      operationId: resumeMigration
+      parameters:
+        - name: migrationId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                checkpoint_id:
+                  type: string
+                  format: uuid
+                  description: Specific checkpoint to resume from (optional)
+                force_resume:
+                  type: boolean
+                  description: Force resume even if safety checks fail
+                  default: false
+      responses:
+        '200':
+          description: Migration resumed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MigrationStatusResponse'
+        '400':
+          description: Cannot resume migration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /migrations/{migrationId}/entities:
+    get:
+      summary: Get Entity Migration Status
+      description: Detailed status of individual entity migrations within overall migration
+      operationId: getEntityStatus
+      parameters:
+        - name: migrationId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: entity_name
+          in: query
+          schema:
+            type: string
+          description: Filter by specific entity name
+      responses:
+        '200':
+          description: Entity status retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  entities:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/EntityMigrationStatus'
+
+  /schema/cleanup:
+    post:
+      summary: Execute Schema Cleanup
+      description: |
+        Remove deprecated columns from destination database (implements FR-003, FR-005).
+        Based on research findings, this will NOT remove legacy_patient_id due to critical usage.
+      operationId: executeSchemaCleanup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                columns_to_remove:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      table_name:
+                        type: string
+                      column_name:
+                        type: string
+                      risk_level:
+                        type: string
+                        enum: [low, medium, high]
+                  example:
+                    - table_name: "profiles"
+                      column_name: "insurance_info"
+                      risk_level: "low"
+                    - table_name: "profiles"
+                      column_name: "medical_history"
+                      risk_level: "low"
+                    - table_name: "products"
+                      column_name: "sku"
+                      risk_level: "medium"
+                dry_run:
+                  type: boolean
+                  description: Validate changes without executing
+                  default: false
+                create_backup:
+                  type: boolean
+                  description: Create backup tables before column removal
+                  default: true
+      responses:
+        '200':
+          description: Schema cleanup executed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SchemaCleanupResponse'
+        '400':
+          description: Invalid cleanup request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /validation:
+    post:
+      summary: Execute Migration Validation
+      description: |
+        Comprehensive validation of migration results (implements FR-013 and success criteria).
+        Validates data integrity, referential constraints, and completeness.
+      operationId: executeMigrationValidation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                migration_id:
+                  type: string
+                  format: uuid
+                validation_types:
+                  type: array
+                  items:
+                    type: string
+                    enum: [referential_integrity, data_completeness, business_rules, performance]
+                  default: [referential_integrity, data_completeness]
+                entity_filters:
+                  type: array
+                  items:
+                    type: string
+                  description: Validate specific entities only
+      responses:
+        '200':
+          description: Validation completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationResponse'
+
+  /monitoring/metrics:
+    get:
+      summary: Get Migration Metrics
+      description: Real-time metrics for monitoring migration performance
+      operationId: getMigrationMetrics
+      parameters:
+        - name: migration_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: time_range
+          in: query
+          schema:
+            type: string
+            enum: [last_hour, last_day, last_week]
+            default: last_hour
+      responses:
+        '200':
+          description: Metrics retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MigrationMetrics'
+
+components:
+  schemas:
+    MigrationRequest:
+      type: object
+      required:
+        - migration_type
+      properties:
+        migration_type:
+          type: string
+          enum: [full_migration, incremental, schema_cleanup]
+          description: Type of migration to execute
+        include_schema_cleanup:
+          type: boolean
+          description: Whether to include schema cleanup operations
+          default: false
+        incremental_only:
+          type: boolean
+          description: Only migrate records added since last migration
+          default: false
+        entity_filters:
+          type: array
+          items:
+            type: string
+          description: Specific entities to migrate (empty = all entities)
+        configuration:
+          type: object
+          properties:
+            batch_size:
+              type: integer
+              minimum: 100
+              maximum: 5000
+              default: 1000
+              description: Records per batch for processing
+            max_parallel_entities:
+              type: integer
+              minimum: 1
+              maximum: 8
+              default: 4
+              description: Maximum concurrent entity migrations
+            enable_rollback:
+              type: boolean
+              default: true
+              description: Create rollback checkpoints
+            memory_limit_mb:
+              type: integer
+              minimum: 256
+              maximum: 2048
+              default: 512
+              description: Memory limit for migration process
+
+    MigrationStatusResponse:
+      type: object
+      properties:
+        migration_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [pending, running, completed, failed, rolling_back]
+        migration_type:
+          type: string
+          enum: [full_migration, incremental, schema_cleanup]
+        progress:
+          type: object
+          properties:
+            percentage:
+              type: number
+              minimum: 0
+              maximum: 100
+            total_entities:
+              type: integer
+            completed_entities:
+              type: integer
+            current_entity:
+              type: string
+              nullable: true
+            records_processed:
+              type: integer
+            estimated_completion:
+              type: string
+              format: date-time
+              nullable: true
+        performance:
+          type: object
+          properties:
+            throughput_per_second:
+              type: number
+            duration_seconds:
+              type: integer
+            memory_usage_mb:
+              type: number
+        error_summary:
+          type: object
+          properties:
+            total_errors:
+              type: integer
+            error_rate_percentage:
+              type: number
+            critical_errors:
+              type: integer
+        started_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    MigrationSummary:
+      type: object
+      properties:
+        migration_id:
+          type: string
+          format: uuid
+        migration_type:
+          type: string
+          enum: [full_migration, incremental, schema_cleanup]
+        status:
+          type: string
+          enum: [pending, running, completed, failed, rolling_back]
+        started_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+        records_processed:
+          type: integer
+        success_rate_percentage:
+          type: number
+        duration_minutes:
+          type: integer
+          nullable: true
+
+    EntityMigrationStatus:
+      type: object
+      properties:
+        entity_name:
+          type: string
+        target_entity:
+          type: string
+        status:
+          type: string
+          enum: [pending, running, completed, failed, skipped]
+        dependency_order:
+          type: integer
+        progress:
+          type: object
+          properties:
+            records_total:
+              type: integer
+            records_processed:
+              type: integer
+            records_failed:
+              type: integer
+            percentage:
+              type: number
+        performance:
+          type: object
+          properties:
+            throughput_per_second:
+              type: number
+            batch_size:
+              type: integer
+            batches_completed:
+              type: integer
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    SchemaCleanupResponse:
+      type: object
+      properties:
+        operation_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [completed, failed, dry_run_completed]
+        operations_performed:
+          type: array
+          items:
+            type: object
+            properties:
+              table_name:
+                type: string
+              column_name:
+                type: string
+              operation:
+                type: string
+                enum: [column_dropped, backup_created, validation_completed]
+              status:
+                type: string
+                enum: [success, failed, skipped]
+              details:
+                type: string
+        backup_tables_created:
+          type: array
+          items:
+            type: string
+        rollback_script_path:
+          type: string
+          nullable: true
+        executed_at:
+          type: string
+          format: date-time
+
+    ValidationResponse:
+      type: object
+      properties:
+        validation_id:
+          type: string
+          format: uuid
+        migration_id:
+          type: string
+          format: uuid
+        overall_status:
+          type: string
+          enum: [passed, failed, warning]
+        validation_results:
+          type: array
+          items:
+            type: object
+            properties:
+              validation_type:
+                type: string
+                enum: [referential_integrity, data_completeness, business_rules, performance]
+              entity_name:
+                type: string
+              status:
+                type: string
+                enum: [passed, failed, warning]
+              records_validated:
+                type: integer
+              issues_found:
+                type: integer
+              issue_details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    severity:
+                      type: string
+                      enum: [error, warning, info]
+                    description:
+                      type: string
+                    affected_records:
+                      type: integer
+                    suggested_action:
+                      type: string
+        executed_at:
+          type: string
+          format: date-time
+        execution_duration_ms:
+          type: integer
+
+    MigrationMetrics:
+      type: object
+      properties:
+        migration_id:
+          type: string
+          format: uuid
+          nullable: true
+        time_range:
+          type: object
+          properties:
+            start_time:
+              type: string
+              format: date-time
+            end_time:
+              type: string
+              format: date-time
+        performance_metrics:
+          type: object
+          properties:
+            average_throughput_per_second:
+              type: number
+            peak_throughput_per_second:
+              type: number
+            total_records_processed:
+              type: integer
+            total_processing_time_seconds:
+              type: integer
+            memory_usage:
+              type: object
+              properties:
+                average_mb:
+                  type: number
+                peak_mb:
+                  type: number
+        error_metrics:
+          type: object
+          properties:
+            total_errors:
+              type: integer
+            error_rate_percentage:
+              type: number
+            errors_by_type:
+              type: object
+              additionalProperties:
+                type: integer
+        system_metrics:
+          type: object
+          properties:
+            active_connections:
+              type: integer
+            database_load_percentage:
+              type: number
+            checkpoint_frequency:
+              type: number
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            details:
+              type: object
+              additionalProperties: true
+            timestamp:
+              type: string
+              format: date-time
+            request_id:
+              type: string
+              format: uuid
+
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: API key for migration system access
+
+security:
+  - ApiKeyAuth: []
+
+tags:
+  - name: Migration Orchestration
+    description: Core migration execution and control
+  - name: Schema Management
+    description: Database schema modification operations
+  - name: Validation
+    description: Data integrity and migration validation
+  - name: Monitoring
+    description: Performance metrics and system monitoring
